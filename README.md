@@ -117,6 +117,8 @@ Open the local URL printed by Vite. Sign in with the email assigned to a shop; e
 
 The shared demo password is `Test@123`. These `.local` addresses are login IDs, not mailboxes. Set `MEDINEXUS_LOGIN_PASSWORD` before starting the API to override the demo password. This prototype keeps sessions in memory, expires them after eight hours, and invalidates them when the API restarts; use a persistent identity and session system before deploying it for real users.
 
+The AI Chatbot uses Groq's `openai/gpt-oss-120b` model. Set `GROQ_API_KEY` in the backend terminal before starting the API; keep the key out of frontend files and source control. For PowerShell, run `$env:GROQ_API_KEY = 'your-groq-api-key'`. Chat answers are based on the signed-in shop's SQLite inventory and supplier records. Chat histories are saved in browser local storage under the signed-in email, so they remain on that browser/device and are not synced elsewhere. This schema does not currently store purchase orders, so the chatbot cannot report existing order status.
+
 ## Store shop data in local databases
 
 No database server is required. Python's built-in SQLite support stores the shop data in local files under `backend/data/shop_databases/`. The importer creates one database file per shop (`medinexus_shop_01.sqlite3` through `medinexus_shop_05.sqlite3`), each with the same normalized tables:
@@ -150,6 +152,7 @@ The API routes are:
 - `GET /dashboard/sales/daily?days=30`: optional daily sales aggregates for future sales views.
 - `GET /dashboard/sales?limit=100&offset=0`: optional paginated sale history API. Optional `start_date` and `end_date` must be supplied together in `YYYY-MM-DD` format.
 - `GET /dashboard/inventory?limit=200&offset=0`: batch stock, expiry, supplier, and stock status.
+- `POST /dashboard/chat`: stream an inventory-grounded chatbot response for the signed-in shop.
 - `POST /dashboard/inventory`: add a supply batch to the signed-in shop's database.
 - `PUT /dashboard/inventory/{batch_id}`: update a batch in the signed-in shop's database.
 - `DELETE /dashboard/inventory/{batch_id}`: delete a batch from the signed-in shop's database.

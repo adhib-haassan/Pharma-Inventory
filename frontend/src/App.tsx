@@ -1,7 +1,7 @@
-import { useState, useEffect, type FormEvent } from 'react'
+import { useState, useEffect, type FormEvent, type ReactNode } from 'react'
 import axios from 'axios'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Activity, Package, AlertTriangle, ShoppingCart, Calendar, LogOut, Pill, ShieldCheck, LayoutDashboard, ChartNoAxesCombined, ChevronLeft, ChevronRight, Boxes, Plus, Pencil, Trash2, X } from 'lucide-react'
+import { Activity, Package, AlertTriangle, ShoppingCart, Calendar, LogOut, Pill, ShieldCheck, LayoutDashboard, ChartNoAxesCombined, ChevronLeft, ChevronRight, Boxes, Plus, Pencil, Trash2, X, MessageCircle, Send } from 'lucide-react'
 
 const API_BASE = 'http://localhost:8000'
 
@@ -9,6 +9,111 @@ interface AuthenticatedUser {
   email: string
   shop_id: string
   shop_name: string
+}
+
+interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+interface ChatThread {
+  id: string
+  title: string
+  messages: ChatMessage[]
+  updatedAt: string
+}
+
+function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
+  return text.split(/(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g).filter(Boolean).map((part, index) => {
+    const key = `${keyPrefix}-${index}`
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={key} className='font-semibold text-slate-900'>{part.slice(2, -2)}</strong>
+    }
+    if (part.startsWith('`') && part.endsWith('`')) {
+      return <code key={key} className='rounded bg-slate-200 px-1 py-0.5 font-mono text-[0.9em]'>{part.slice(1, -1)}</code>
+    }
+    if (part.startsWith('*') && part.endsWith('*')) {
+      return <em key={key}>{part.slice(1, -1)}</em>
+    }
+    return <span key={key}>{part}</span>
+  })
+}
+
+function renderChatMarkdown(content: string): ReactNode[] {
+  const lines = content.split(/\r?\n/)
+  const blocks: ReactNode[] = []
+  const cells = (line: string) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim())
+  const isTableDivider = (line: string) => cells(line).length > 1 && cells(line).every(cell => /^:?-{3,}:?$/.test(cell))
+
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index].trim()
+    if (!line) { index += 1; continue }
+
+    if (line.includes('|') && index + 1 < lines.length && isTableDivider(lines[index + 1])) {
+      const headers = cells(line)
+      index += 2
+      const rows: string[][] = []
+      while (index < lines.length && lines[index].trim().includes('|')) {
+        rows.push(cells(lines[index]))
+        index += 1
+      }
+      blocks.push(
+        <div key={`table-${index}`} className='my-3 max-w-full overflow-x-auto rounded-lg border border-slate-200 bg-white'>
+          <table className='w-full border-collapse text-left text-xs sm:text-sm'>
+            <thead className='bg-slate-200/70 text-slate-700'>
+              <tr>{headers.map((cell, column) => <th key={column} className='whitespace-nowrap border-b border-slate-200 px-3 py-2 font-semibold'>{renderInlineMarkdown(cell, `th-${index}-${column}`)}</th>)}</tr>
+            </thead>
+            <tbody className='divide-y divide-slate-100'>
+              {rows.map((row, rowIndex) => (
+                <tr key={rowIndex} className='odd:bg-white even:bg-slate-50'>
+                  {headers.map((_, column) => <td key={column} className='whitespace-nowrap px-3 py-2 text-slate-700'>{renderInlineMarkdown(row[column] ?? '', `td-${index}-${rowIndex}-${column}`)}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      )
+      continue
+    }
+
+    const heading = /^(#{1,3})\s+(.+)$/.exec(line)
+    if (heading) {
+      const HeadingTag = heading[1].length === 1 ? 'h3' : 'h4'
+      blocks.push(<HeadingTag key={`heading-${index}`} className='mb-2 mt-3 font-semibold text-slate-900'>{renderInlineMarkdown(heading[2], `heading-${index}`)}</HeadingTag>)
+      index += 1
+      continue
+    }
+
+    if (/^[-*]\s+/.test(line)) {
+      const items: string[] = []
+      while (index < lines.length && /^\s*[-*]\s+/.test(lines[index])) {
+        items.push(lines[index].trim().replace(/^[-*]\s+/, ''))
+        index += 1
+      }
+      blocks.push(<ul key={`list-${index}`} className='my-2 list-disc space-y-1 pl-5'>{items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineMarkdown(item, `list-${index}-${itemIndex}`)}</li>)}</ul>)
+      continue
+    }
+
+    if (/^\d+[.)]\s+/.test(line)) {
+      const items: string[] = []
+      while (index < lines.length && /^\s*\d+[.)]\s+/.test(lines[index])) {
+        items.push(lines[index].trim().replace(/^\d+[.)]\s+/, ''))
+        index += 1
+      }
+      blocks.push(<ol key={`ordered-${index}`} className='my-2 list-decimal space-y-1 pl-5'>{items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineMarkdown(item, `ordered-${index}-${itemIndex}`)}</li>)}</ol>)
+      continue
+    }
+
+    const paragraph = [line]
+    index += 1
+    while (index < lines.length && lines[index].trim() && !/^\s*(#{1,3}\s+|[-*]\s+|\d+[.)]\s+)/.test(lines[index])
+      && !(lines[index].includes('|') && index + 1 < lines.length && isTableDivider(lines[index + 1]))) {
+      paragraph.push(lines[index].trim())
+      index += 1
+    }
+    blocks.push(<p key={`paragraph-${index}`} className='my-1.5 leading-6'>{renderInlineMarkdown(paragraph.join(' '), `paragraph-${index}`)}</p>)
+  }
+  return blocks
 }
 
 interface Medicine {
@@ -106,7 +211,7 @@ function emptyInventoryBatchForm(): InventoryBatchForm {
 }
 
 function App() {
-  const [dashboardSection, setDashboardSection] = useState<'dashboard' | 'forecasting'>('dashboard')
+  const [dashboardSection, setDashboardSection] = useState<'dashboard' | 'forecasting' | 'chat'>('dashboard')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [accessToken, setAccessToken] = useState(() => localStorage.getItem('medinexus_access_token'))
   const [user, setUser] = useState<AuthenticatedUser | null>(null)
@@ -134,7 +239,15 @@ function App() {
   const [inventoryForm, setInventoryForm] = useState<InventoryBatchForm>(emptyInventoryBatchForm())
   const [inventorySaving, setInventorySaving] = useState(false)
   const [inventoryMessage, setInventoryMessage] = useState('')
+  const [chatThreads, setChatThreads] = useState<ChatThread[]>([])
+  const [activeChatId, setActiveChatId] = useState<string | null>(null)
+  const [chatOwner, setChatOwner] = useState<string | null>(null)
+  const [chatDraft, setChatDraft] = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
+  const [chatError, setChatError] = useState('')
   const tablePageSize = 8
+  const chatMessages = chatThreads.find(thread => thread.id === activeChatId)?.messages ?? []
+  const chatStorageKey = user ? `medinexus_ai_chats:${user.email.toLowerCase()}` : null
 
   useEffect(() => {
     if (!accessToken) {
@@ -170,6 +283,47 @@ function App() {
   useEffect(() => {
     if (user && accessToken) fetchInventoryPage(accessToken, inventoryPage)
   }, [user, accessToken, inventoryPage])
+
+  useEffect(() => {
+    setChatOwner(null)
+    setChatThreads([])
+    setActiveChatId(null)
+    if (!user || !chatStorageKey) return
+
+    try {
+      const saved = localStorage.getItem(chatStorageKey)
+      if (saved) {
+        const parsed = JSON.parse(saved) as { threads?: ChatThread[]; activeChatId?: string | null }
+        const threads = Array.isArray(parsed.threads)
+          ? parsed.threads.filter(thread => thread && typeof thread.id === 'string'
+            && typeof thread.title === 'string' && Array.isArray(thread.messages))
+            .slice(-20)
+          : []
+        setChatThreads(threads)
+        setActiveChatId(threads.some(thread => thread.id === parsed.activeChatId)
+          ? parsed.activeChatId ?? null
+          : threads.at(-1)?.id ?? null)
+      }
+    } catch {
+      localStorage.removeItem(chatStorageKey)
+    }
+    setChatOwner(user.email.toLowerCase())
+  }, [user?.email])
+
+  useEffect(() => {
+    if (!chatStorageKey || chatOwner !== user?.email.toLowerCase()) return
+    const timeout = window.setTimeout(() => {
+      try {
+        const recentThreads = [...chatThreads]
+          .sort((first, second) => first.updatedAt.localeCompare(second.updatedAt))
+          .slice(-20)
+        localStorage.setItem(chatStorageKey, JSON.stringify({ threads: recentThreads, activeChatId }))
+      } catch {
+        setChatError('Could not save chat history in this browser.')
+      }
+    }, 250)
+    return () => window.clearTimeout(timeout)
+  }, [chatThreads, activeChatId, chatStorageKey, chatOwner, user?.email])
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -421,6 +575,101 @@ function App() {
     }
   }
 
+  const startNewChat = () => {
+    if (chatLoading) return
+    const thread: ChatThread = {
+      id: globalThis.crypto.randomUUID(),
+      title: 'New chat',
+      messages: [],
+      updatedAt: new Date().toISOString(),
+    }
+    setChatThreads(current => [...current, thread].slice(-20))
+    setActiveChatId(thread.id)
+    setChatDraft('')
+    setChatError('')
+  }
+
+  const deleteChatThread = (threadId: string) => {
+    const remaining = chatThreads.filter(thread => thread.id !== threadId)
+    setChatThreads(remaining)
+    if (activeChatId === threadId) setActiveChatId(remaining.at(-1)?.id ?? null)
+  }
+
+  const handleChatSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const question = chatDraft.trim()
+    if (!question || !accessToken || chatLoading) return
+
+    const threadId = activeChatId ?? globalThis.crypto.randomUUID()
+    const existingThread = chatThreads.find(thread => thread.id === threadId)
+    const history = [...(existingThread?.messages ?? []), { role: 'user' as const, content: question }].slice(-12)
+    const pendingMessages: ChatMessage[] = [...history, { role: 'assistant', content: '' }]
+    const updatedThread: ChatThread = {
+      id: threadId,
+      title: existingThread && existingThread.title !== 'New chat'
+        ? existingThread.title
+        : question.slice(0, 48),
+      messages: pendingMessages,
+      updatedAt: new Date().toISOString(),
+    }
+    setChatThreads(current => current.some(thread => thread.id === threadId)
+      ? current.map(thread => thread.id === threadId ? updatedThread : thread)
+      : [...current, updatedThread].slice(-20))
+    setActiveChatId(threadId)
+    setChatDraft('')
+    setChatError('')
+    setChatLoading(true)
+    try {
+      const response = await fetch(`${API_BASE}/dashboard/chat`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ messages: history }),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        if (response.status === 401) {
+          await handleLogout()
+          setLoginError('Your session expired. Please sign in again.')
+          return
+        }
+        throw new Error(typeof body.detail === 'string' ? body.detail : 'Could not get a response from the AI chatbot.')
+      }
+      if (!response.body) throw new Error('Streaming is not available in this browser.')
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      const appendAnswer = (part: string) => {
+        if (!part) return
+        setChatThreads(current => current.map(thread => thread.id === threadId
+          ? {
+            ...thread,
+            updatedAt: new Date().toISOString(),
+            messages: thread.messages.map((message, index) => index === thread.messages.length - 1
+              ? { ...message, content: message.content + part }
+              : message),
+          }
+          : thread))
+      }
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        appendAnswer(decoder.decode(value, { stream: true }))
+      }
+      appendAnswer(decoder.decode())
+    } catch (error) {
+      setChatThreads(current => current.map(thread => thread.id === threadId
+        && thread.messages.at(-1)?.role === 'assistant' && !thread.messages.at(-1)?.content
+        ? { ...thread, messages: thread.messages.slice(0, -1) }
+        : thread))
+      setChatError(error instanceof Error ? error.message : 'Could not get a response from the AI chatbot.')
+    } finally {
+      setChatLoading(false)
+    }
+  }
+
   const getRiskColor = (risk: string) => {
     if (risk === 'HIGH') return 'text-red-600 bg-red-50'
     if (risk === 'MEDIUM') return 'text-yellow-600 bg-yellow-50'
@@ -530,6 +779,7 @@ function App() {
             {([
               ['dashboard', 'Dashboard', LayoutDashboard],
               ['forecasting', 'Forecasting', ChartNoAxesCombined],
+              ['chat', 'AI Chatbot', MessageCircle],
             ] as const).map(([section, label, Icon]) => (
               <button
                 key={section}
@@ -881,6 +1131,126 @@ function App() {
               </form>
             </section>
           </div>
+        )}
+
+        {dashboardSection === 'chat' && (
+          <section className='mx-auto flex h-full max-w-6xl flex-col gap-5'>
+            <div className='flex flex-wrap items-start justify-between gap-3'>
+              <div>
+                <div className='flex items-center gap-2'>
+                  <MessageCircle className='h-6 w-6 text-blue-700' />
+                  <h1 className='text-2xl font-bold text-slate-900'>AI Chatbot</h1>
+                </div>
+                <p className='mt-1 text-sm text-slate-500'>Ask about stock, expiry, suppliers, and inventory for {user.shop_name}.</p>
+              </div>
+              <button
+                type='button'
+                onClick={startNewChat}
+                disabled={chatLoading || chatOwner !== user.email.toLowerCase()}
+                className='inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50'
+              ><Plus className='h-4 w-4' />New chat</button>
+            </div>
+
+            <div className='grid min-h-[480px] flex-1 gap-4 md:grid-cols-[220px_minmax(0,1fr)]'>
+              <aside className='flex min-h-32 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm'>
+                <div className='border-b border-slate-100 px-4 py-3'>
+                  <h2 className='text-sm font-semibold text-slate-800'>Your chats</h2>
+                  <p className='mt-0.5 text-xs text-slate-400'>Saved on this device</p>
+                </div>
+                <div className='max-h-44 flex-1 space-y-1 overflow-y-auto p-2 md:max-h-none'>
+                  {chatThreads.length === 0 ? (
+                    <p className='px-2 py-4 text-xs text-slate-400'>No saved chats yet.</p>
+                  ) : [...chatThreads].sort((first, second) => second.updatedAt.localeCompare(first.updatedAt)).map(thread => (
+                    <div key={thread.id} className={`group flex items-center gap-1 rounded-lg ${activeChatId === thread.id ? 'bg-blue-50' : 'hover:bg-slate-50'}`}>
+                      <button
+                        type='button'
+                        onClick={() => { setActiveChatId(thread.id); setChatDraft(''); setChatError('') }}
+                        disabled={chatLoading}
+                        className={`min-w-0 flex-1 px-2.5 py-2 text-left disabled:opacity-60 ${activeChatId === thread.id ? 'text-blue-800' : 'text-slate-700'}`}
+                      >
+                        <span className='block truncate text-xs font-medium'>{thread.title}</span>
+                        <span className='mt-0.5 block text-[10px] text-slate-400'>{new Date(thread.updatedAt).toLocaleDateString()}</span>
+                      </button>
+                      <button
+                        type='button'
+                        onClick={() => deleteChatThread(thread.id)}
+                        disabled={chatLoading}
+                        aria-label={`Delete chat ${thread.title}`}
+                        title='Delete chat'
+                        className='mr-1 rounded p-1.5 text-slate-400 opacity-100 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40 sm:opacity-0 sm:group-hover:opacity-100'
+                      ><Trash2 className='h-3.5 w-3.5' /></button>
+                    </div>
+                  ))}
+                </div>
+              </aside>
+
+            <div className='flex min-h-[480px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm'>
+              {chatMessages.length > 0 && (
+                <div className='border-b border-slate-100 px-4 py-2.5 text-xs font-medium text-slate-500'>
+                  {chatThreads.find(thread => thread.id === activeChatId)?.title}
+                </div>
+              )}
+              <div className='flex-1 space-y-4 overflow-y-auto p-4 sm:p-6' aria-live='polite'>
+                {chatMessages.length === 0 ? (
+                  <div className='mx-auto flex h-full max-w-xl flex-col items-center justify-center py-10 text-center'>
+                    <span className='mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-700'>
+                      <MessageCircle className='h-7 w-7' />
+                    </span>
+                    <h2 className='text-lg font-semibold text-slate-900'>Ask about your inventory</h2>
+                    <p className='mt-2 text-sm leading-6 text-slate-500'>Answers use current stock, batch expiry, and supplier records from your shop.</p>
+                    <p className='mt-1 text-xs text-slate-400'>Purchase orders are not stored in this app, so the chatbot can’t report existing order status.</p>
+                    <div className='mt-6 flex flex-wrap justify-center gap-2'>
+                      {['Which medicines are low on stock?', 'What expires in the next 30 days?', 'Which suppliers have the most stock?'].map(question => (
+                        <button
+                          key={question}
+                          type='button'
+                          onClick={() => setChatDraft(question)}
+                          className='rounded-full border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700'
+                        >{question}</button>
+                      ))}
+                    </div>
+                  </div>
+                ) : chatMessages.map((message, index) => (
+                  <div key={`${index}-${message.role}`} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[90%] rounded-2xl px-4 py-3 text-sm leading-6 sm:max-w-[80%] ${
+                      message.role === 'user' ? 'bg-blue-700 text-white' : 'bg-slate-100 text-slate-800'
+                    }`}>
+                      {message.content
+                        ? <div className='min-w-0 break-words'>{renderChatMarkdown(message.content)}</div>
+                        : <p className='text-slate-500'>{chatLoading ? 'Thinking…' : 'No response received.'}</p>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {chatError && <p role='alert' className='mx-4 mb-2 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700'>{chatError}</p>}
+              <form onSubmit={handleChatSubmit} className='flex items-stretch gap-2 border-t border-slate-100 p-3 sm:p-4'>
+                <label className='sr-only' htmlFor='inventory-chat-input'>Ask the inventory chatbot</label>
+                <textarea
+                  id='inventory-chat-input'
+                  value={chatDraft}
+                  onChange={event => setChatDraft(event.target.value)}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                      event.preventDefault()
+                      event.currentTarget.form?.requestSubmit()
+                    }
+                  }}
+                  maxLength={4000}
+                  rows={1}
+                  placeholder='Ask about stock, expiry, or suppliers…'
+                  className='max-h-36 min-h-12 flex-1 resize-y rounded-xl border border-slate-200 px-3 py-2 text-sm leading-5 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100'
+                />
+                <button
+                  type='submit'
+                  disabled={!chatDraft.trim() || chatLoading}
+                  className='inline-flex min-h-12 shrink-0 self-stretch items-center gap-2 rounded-xl bg-blue-700 px-4 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50'
+                ><Send className='h-4 w-4' /><span className='hidden sm:inline'>{chatLoading ? 'Replying' : 'Send'}</span></button>
+              </form>
+              <p className='px-4 pb-3 text-center text-[11px] text-slate-400'>AI can make mistakes. Verify inventory decisions against the batch records.</p>
+            </div>
+            </div>
+          </section>
         )}
 
         {dashboardSection === 'forecasting' && (
