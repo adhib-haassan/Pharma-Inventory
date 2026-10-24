@@ -54,6 +54,8 @@ function App() {
   const [medicines, setMedicines] = useState<Medicine[]>([])
   const [selectedShop, setSelectedShop] = useState('')
   const [medicineQuery, setMedicineQuery] = useState('')
+  const [medicinesLoading, setMedicinesLoading] = useState(false)
+  const [medicinesError, setMedicinesError] = useState('')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<ForecastResult | null>(null)
   const [error, setError] = useState('')
@@ -74,11 +76,16 @@ function App() {
   }
 
   const fetchMedicines = async () => {
+    setMedicinesLoading(true)
+    setMedicinesError('')
     try {
-      const res = await axios.get(`${API_BASE}/medicines?limit=100`)
+      const res = await axios.get(`${API_BASE}/medicines?limit=500`)
       setMedicines(res.data)
     } catch (e) {
       console.error(e)
+      setMedicinesError('Could not load medicines. Check that the Python API is running, then refresh.')
+    } finally {
+      setMedicinesLoading(false)
     }
   }
 
@@ -140,15 +147,23 @@ function App() {
               </select>
             </div>
             <div className='md:col-span-2'>
-              <label className='block text-sm font-medium text-gray-700 mb-2'>Medicine (Name or ID)</label>
-              <input
-                type='text'
+              <label className='block text-sm font-medium text-gray-700 mb-2'>Medicine</label>
+              <select
                 value={medicineQuery}
                 onChange={(e) => setMedicineQuery(e.target.value)}
-                placeholder='e.g., Paracetamol or MED_001'
+                disabled={medicinesLoading || medicines.length === 0}
                 className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
-                onKeyPress={(e) => e.key === 'Enter' && handleForecast()}
-              />
+              >
+                <option value=''>
+                  {medicinesLoading ? 'Loading medicines...' : medicines.length === 0 ? 'No medicines available' : 'Select a medicine'}
+                </option>
+                {medicines.map(medicine => (
+                  <option key={medicine.medicine_id} value={medicine.medicine_id}>
+                    {medicine.medicine_name} ({medicine.medicine_id})
+                  </option>
+                ))}
+              </select>
+              {medicinesError && <p className='mt-2 text-red-600 text-sm'>{medicinesError}</p>}
             </div>
           </div>
           <button
