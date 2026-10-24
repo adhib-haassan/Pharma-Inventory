@@ -1,6 +1,6 @@
 # MediNexus Phase 1: Medical-Shop Demand Forecasting
 
-MediNexus is a research prototype for exploring daily medicine-demand forecasting and inventory planning across five simulated medical shops. It includes a Jupyter notebook for data analysis and model evaluation, and a command-line application for selecting a shop and medicine and viewing a 30-day forecast.
+MediNexus is a research prototype for exploring daily medicine-demand forecasting and inventory planning across five simulated medical shops. It includes a Jupyter notebook for data analysis and model evaluation, and a command line application for selecting a shop and medicine and viewing a 30-day forecast.
 
 
 ## Contents
