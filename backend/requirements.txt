@@ -5,3 +5,5 @@ xgboost
 matplotlib
 scikit-learn
 jupyter
+fastapi
+uvicorn

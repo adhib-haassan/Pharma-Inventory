@@ -87,6 +87,36 @@ python MediNexus_Terminal_Forecast.py
 
 Select `1` to forecast, choose a shop using its ID such as `SHOP_01`, then enter a medicine name or ID such as `Steglatro` or `MED0004`. The app also supports partial medicine-name matching. Select `2` to list medicines or `3` to exit.
 
+## Run the web application
+
+Install the Python dependencies from the project root, then start the API in one terminal:
+
+```powershell
+python -m pip install -r backend\requirements.txt
+cd backend
+python -m uvicorn main:app --reload --port 8000
+```
+
+In a second terminal, start the React frontend:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Open the local URL printed by Vite. Sign in with the email assigned to a shop; each signed-in account is automatically restricted to that shop:
+
+| Shop | Login email |
+| --- | --- |
+| SHOP_01 | `shop_01@medinexus.local` |
+| SHOP_02 | `shop_02@medinexus.local` |
+| SHOP_03 | `shop_03@medinexus.local` |
+| SHOP_04 | `shop_04@medinexus.local` |
+| SHOP_05 | `shop_05@medinexus.local` |
+
+The shared demo password is `Test@123`. These `.local` addresses are login IDs, not mailboxes. Set `MEDINEXUS_LOGIN_PASSWORD` before starting the API to override the demo password. This prototype keeps sessions in memory, expires them after eight hours, and invalidates them when the API restarts; use a persistent identity and session system before deploying it for real users.
+
 
 ## Run the notebook
 
@@ -222,5 +252,4 @@ The forecasting layer estimates demand; a separate deterministic layer turns it 
 - **Purchase quantity:** the CLI adds a modest safety-stock allowance to 30-day demand, subtracts usable stock, and floors the result at zero. A high expiry-risk result suppresses a new purchase recommendation.
 
 Inventory calculations are only as accurate as the inventory snapshot. For operational use, batch records should contain actual current quantities and authoritative expiry dates; `opening_stock` from a synthetic dataset is not a live on-hand count.
-
 
