@@ -5,3 +5,8 @@ xgboost
 matplotlib
 scikit-learn
 jupyter
+fastapi
+uvicorn
+groq
+reportlab
+python-dotenv

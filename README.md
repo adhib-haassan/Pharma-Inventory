@@ -1,4 +1,4 @@
-# MediNexus Phase 1: Medical-Shop Demand Forecasting
+# MediNexus
 
 MediNexus is a research prototype for exploring daily medicine-demand forecasting and inventory planning across five simulated medical shops. It includes a Jupyter notebook for data analysis and model evaluation, and a command line application for selecting a shop and medicine and viewing a 30-day forecast.
 
@@ -86,6 +86,82 @@ python MediNexus_Terminal_Forecast.py
 ```
 
 Select `1` to forecast, choose a shop using its ID such as `SHOP_01`, then enter a medicine name or ID such as `Steglatro` or `MED0004`. The app also supports partial medicine-name matching. Select `2` to list medicines or `3` to exit.
+
+## Run the web application
+
+Install the Python dependencies from the project root, then start the API in one terminal:
+
+```powershell
+python -m pip install -r backend\requirements.txt
+cd backend
+python -m uvicorn main:app --reload --port 8000
+```
+
+In a second terminal, start the React frontend:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Open the local URL printed by Vite. Sign in with the email assigned to a shop; each signed-in account is automatically restricted to that shop:
+
+| Shop | Login email |
+| --- | --- |
+| SHOP_01 | `shop_01@medinexus.local` |
+| SHOP_02 | `shop_02@medinexus.local` |
+| SHOP_03 | `shop_03@medinexus.local` |
+| SHOP_04 | `shop_04@medinexus.local` |
+| SHOP_05 | `shop_05@medinexus.local` |
+
+The shared demo password is `Test@123`. These `.local` addresses are login IDs, not mailboxes. Set `MEDINEXUS_LOGIN_PASSWORD` before starting the API to override the demo password. This prototype keeps sessions in memory, expires them after eight hours, and invalidates them when the API restarts; use a persistent identity and session system before deploying it for real users.
+
+Copy the checked-in `.env.example` to `.env` in the project root and add local settings there. The backend loads `.env` at startup; existing process environment variables take precedence. `.env` is ignored by Git, while `.env.example` is safe to check in. The AI Chatbot uses Groq's `openai/gpt-oss-120b` model and reads `GROQ_API_KEY` from this config. Chat answers are based on the signed-in shop's SQLite inventory and supplier records. Chat histories are saved in browser local storage under the signed-in email, so they remain on that browser/device and are not synced elsewhere. This schema does not currently store purchase orders, so the chatbot cannot report existing order status.
+
+Forecast reports can be downloaded as PDFs or emailed from the Forecasting view. Email delivery reads `SMTP_HOST`, `SMTP_FROM_EMAIL`, `SMTP_PORT` (defaults to `587`), `SMTP_USERNAME`, `SMTP_PASSWORD`, and `SMTP_USE_SSL` (`true` for implicit SSL, typically port `465`; otherwise STARTTLS is used) from `.env`. The recipient address is validated in the form and again by the API.
+
+## Store shop data in local databases
+
+No database server is required. Python's built-in SQLite support stores the shop data in local files under `backend/data/shop_databases/`. The importer creates one database file per shop (`medinexus_shop_01.sqlite3` through `medinexus_shop_05.sqlite3`), each with the same normalized tables:
+
+- `shop_profile`: the local shop identity.
+- `medicines`: the shop's medicine catalog.
+- `sales_history`: daily sales quantities by date and medicine.
+- `inventory_batches`: current quantity and expiry details for each batch.
+
+The medicine catalog is copied into each database so shops can operate independently. Each sales row stores the sale-time unit price as well as units sold, so later catalog price changes do not rewrite historical revenue. The CSV has no discount or return fields, so dashboard sales revenue is an estimate of units sold multiplied by the recorded unit price, not accounting net revenue. Batch expiry dates are the source of inventory expiry information; the medicine catalog's older `expiry_date` is retained only as `catalog_expiry_date`.
+
+Validate all CSVs, then create/populate the local database files:
+
+```powershell
+python backend\scripts\import_shop_csvs_to_sqlite.py --validate-only
+python backend\scripts\import_shop_csvs_to_sqlite.py
+```
+
+To import just one shop, pass `--shop SHOP_01`. An import into an already populated database fails rather than overwriting data. To deliberately replace all existing rows for the selected shop or shops with the CSV contents, pass `--replace`. The importer upgrades an older database schema to add sale-time prices; reloading that shop's CSV data after the upgrade requires `--replace`. The schema is in `backend/database/schema.sql`.
+
+The authenticated API uses the signed-in account's shop ID to select that shop's database file; clients cannot request another shop's data by changing a query parameter. Start the API as usual; no database credentials or server variables are needed:
+
+```powershell
+cd backend
+python -m uvicorn main:app --reload --port 8000
+```
+
+The API routes are:
+
+- `GET /dashboard/summary`: catalog and available-stock counts, low-stock/expiring batch counts, and total batch count.
+- `GET /dashboard/sales/daily?days=30`: optional daily sales aggregates for future sales views.
+- `GET /dashboard/sales?limit=100&offset=0`: optional paginated sale history API. Optional `start_date` and `end_date` must be supplied together in `YYYY-MM-DD` format.
+- `GET /dashboard/inventory?limit=200&offset=0`: batch stock, expiry, supplier, and stock status.
+- `POST /dashboard/chat`: stream an inventory-grounded chatbot response for the signed-in shop.
+- `POST /forecast/pdf`: create a PDF of the current forecast for download.
+- `POST /forecast/email`: email the current forecast PDF to a validated recipient using configured SMTP.
+- `POST /dashboard/inventory`: add a supply batch to the signed-in shop's database.
+- `PUT /dashboard/inventory/{batch_id}`: update a batch in the signed-in shop's database.
+- `DELETE /dashboard/inventory/{batch_id}`: delete a batch from the signed-in shop's database.
+
+Inventory changes are validated and saved only to the signed-in shop's local SQLite database. The Dashboard focuses on stock levels and expiring/low-stock items, with a paginated inventory table and controls to add, edit, or delete batches. Forecasting is a separate sidebar section and continues to use the project's forecasting CSV/model pipeline for demand history, while using current batch inventory from the shop database.
 
 
 ## Run the notebook
@@ -222,5 +298,3 @@ The forecasting layer estimates demand; a separate deterministic layer turns it 
 - **Purchase quantity:** the CLI adds a modest safety-stock allowance to 30-day demand, subtracts usable stock, and floors the result at zero. A high expiry-risk result suppresses a new purchase recommendation.
 
 Inventory calculations are only as accurate as the inventory snapshot. For operational use, batch records should contain actual current quantities and authoritative expiry dates; `opening_stock` from a synthetic dataset is not a live on-hand count.
-
-
