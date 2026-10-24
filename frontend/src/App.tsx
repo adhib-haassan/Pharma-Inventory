@@ -1,7 +1,7 @@
 import { useState, useEffect, type FormEvent } from 'react'
 import axios from 'axios'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Activity, Package, AlertTriangle, ShoppingCart, Calendar, LogOut } from 'lucide-react'
+import { Activity, Package, AlertTriangle, ShoppingCart, Calendar, LogOut, Pill, ShieldCheck } from 'lucide-react'
 
 const API_BASE = 'http://localhost:8000'
 
@@ -196,48 +196,74 @@ function App() {
 
   if (!user || !accessToken) {
     return (
-      <div className='min-h-screen bg-gray-50'>
-        <header className='bg-white shadow-sm border-b'>
-          <div className='max-w-7xl mx-auto px-4 py-6'>
-            <h1 className='text-3xl font-bold text-gray-900 flex items-center gap-2'>
-              <Activity className='w-8 h-8 text-blue-600' />
-              MediNexus - Demand Forecast & Prediction
+      <div className='relative min-h-screen overflow-hidden bg-slate-50'>
+        <div className='absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,_var(--tw-gradient-stops))] from-cyan-100 via-slate-50 to-blue-100' />
+        <div className='absolute -left-32 -top-32 h-96 w-96 rounded-full bg-cyan-200/40 blur-3xl' />
+        <div className='absolute -bottom-40 -right-20 h-[32rem] w-[32rem] rounded-full bg-blue-200/50 blur-3xl' />
+        <main className='relative mx-auto grid min-h-screen max-w-6xl items-center gap-12 px-6 py-12 lg:grid-cols-2 lg:gap-20'>
+          <section className='mx-auto w-full max-w-lg text-center lg:text-left'>
+            <div className='mx-auto mb-8 flex h-40 max-w-sm items-center justify-center rounded-3xl border border-white/80 bg-white/80 p-5 shadow-xl shadow-blue-900/5 backdrop-blur lg:mx-0'>
+              <img src='/medinexus-logo.png' alt='MediNexus' className='h-full w-full object-contain' />
+            </div>
+            <div className='mb-5 inline-flex items-center gap-2 rounded-full border border-cyan-200 bg-white/70 px-4 py-2 text-sm font-medium text-cyan-900 shadow-sm'>
+              <Pill className='h-4 w-4' />
+              Pharmacy inventory intelligence
+            </div>
+            <h1 className='text-4xl font-bold leading-tight tracking-tight text-slate-900 sm:text-5xl'>
+              Better visibility for every shelf.
             </h1>
-            <p className='text-gray-600 mt-1'>Sign in to view your shop's inventory forecasts</p>
-          </div>
-        </header>
-        <main className='max-w-md mx-auto px-4 py-12'>
-          <form onSubmit={handleLogin} className='bg-white rounded-lg shadow-sm p-6'>
-            <h2 className='text-xl font-semibold mb-5'>Sign in</h2>
-            <label htmlFor='email' className='block text-sm font-medium text-gray-700 mb-2'>Email</label>
-            <input
-              id='email'
-              type='email'
-              autoComplete='username'
-              required
-              value={email}
-              onChange={event => setEmail(event.target.value)}
-              className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4'
-            />
-            <label htmlFor='password' className='block text-sm font-medium text-gray-700 mb-2'>Password</label>
-            <input
-              id='password'
-              type='password'
-              autoComplete='current-password'
-              required
-              value={password}
-              onChange={event => setPassword(event.target.value)}
-              className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
-            />
-            {loginError && <p role='alert' className='mt-3 text-red-600 text-sm'>{loginError}</p>}
-            <button
-              type='submit'
-              disabled={loginLoading}
-              className='mt-5 w-full px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed'
-            >
-              {loginLoading ? 'Signing in...' : 'Sign in'}
-            </button>
-          </form>
+            <p className='mx-auto mt-5 max-w-md text-lg leading-8 text-slate-600 lg:mx-0'>
+              Sign in to view medicine demand forecasts, stock levels, and expiry insights for your pharmacy.
+            </p>
+            <div className='mt-8 flex items-center justify-center gap-3 text-sm font-medium text-slate-600 lg:justify-start'>
+              <span className='flex h-10 w-10 items-center justify-center rounded-xl bg-white text-blue-700 shadow-sm'>
+                <ShieldCheck className='h-5 w-5' />
+              </span>
+              Secure, shop-specific access
+            </div>
+          </section>
+
+          <section className='mx-auto w-full max-w-md'>
+            <form onSubmit={handleLogin} className='rounded-3xl border border-white bg-white/95 p-8 shadow-2xl shadow-blue-950/10 sm:p-10'>
+              <div className='mb-8'>
+                <p className='text-sm font-semibold uppercase tracking-[0.18em] text-cyan-700'>Welcome back</p>
+                <h2 className='mt-2 text-3xl font-bold tracking-tight text-slate-900'>Sign in to MediNexus</h2>
+                <p className='mt-2 text-sm text-slate-500'>Use your pharmacy account to continue.</p>
+              </div>
+              <label htmlFor='email' className='mb-2 block text-sm font-semibold text-slate-700'>Email address</label>
+              <input
+                id='email'
+                type='email'
+                autoComplete='username'
+                required
+                value={email}
+                onChange={event => setEmail(event.target.value)}
+                placeholder='you@pharmacy.com'
+                className='mb-5 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-cyan-500 focus:bg-white focus:ring-4 focus:ring-cyan-500/10'
+              />
+              <label htmlFor='password' className='mb-2 block text-sm font-semibold text-slate-700'>Password</label>
+              <input
+                id='password'
+                type='password'
+                autoComplete='current-password'
+                required
+                value={password}
+                onChange={event => setPassword(event.target.value)}
+                placeholder='Enter your password'
+                className='w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-cyan-500 focus:bg-white focus:ring-4 focus:ring-cyan-500/10'
+              />
+              {loginError && <p role='alert' className='mt-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700'>{loginError}</p>}
+              <button
+                type='submit'
+                disabled={loginLoading}
+                className='mt-7 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-700 to-blue-700 px-6 py-3.5 font-semibold text-white shadow-lg shadow-blue-900/20 transition hover:-translate-y-0.5 hover:from-cyan-800 hover:to-blue-800 focus:outline-none focus:ring-4 focus:ring-blue-500/20 disabled:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60'
+              >
+                <Pill className='h-5 w-5' />
+                {loginLoading ? 'Signing in...' : 'Sign in securely'}
+              </button>
+              <p className='mt-6 text-center text-xs text-slate-400'>Authorized pharmacy staff only</p>
+            </form>
+          </section>
         </main>
       </div>
     )
@@ -248,11 +274,7 @@ function App() {
       <header className='bg-white shadow-sm border-b'>
         <div className='max-w-7xl mx-auto px-4 py-5 flex flex-wrap items-center justify-between gap-4'>
           <div>
-            <h1 className='text-3xl font-bold text-gray-900 flex items-center gap-2'>
-              <Activity className='w-8 h-8 text-blue-600' />
-              MediNexus - Demand Forecast & Prediction
-            </h1>
-            <p className='text-gray-600 mt-1'>Phase 1: Federated Learning for Medical-Shop Demand Forecasting</p>
+            <img src='/medinexus-logo.png' alt='MediNexus' className='h-16 w-52 object-contain object-left' />
           </div>
           <div className='flex items-center gap-4'>
             <div className='text-right'>

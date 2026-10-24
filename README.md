@@ -1,4 +1,4 @@
-# MediNexus Phase 1: Medical-Shop Demand Forecasting
+# MediNexus
 
 MediNexus is a research prototype for exploring daily medicine-demand forecasting and inventory planning across five simulated medical shops. It includes a Jupyter notebook for data analysis and model evaluation, and a command line application for selecting a shop and medicine and viewing a 30-day forecast.
 
@@ -252,4 +252,3 @@ The forecasting layer estimates demand; a separate deterministic layer turns it 
 - **Purchase quantity:** the CLI adds a modest safety-stock allowance to 30-day demand, subtracts usable stock, and floors the result at zero. A high expiry-risk result suppresses a new purchase recommendation.
 
 Inventory calculations are only as accurate as the inventory snapshot. For operational use, batch records should contain actual current quantities and authoritative expiry dates; `opening_stock` from a synthetic dataset is not a live on-hand count.
-
