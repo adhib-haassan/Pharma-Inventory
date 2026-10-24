@@ -117,6 +117,42 @@ Open the local URL printed by Vite. Sign in with the email assigned to a shop; e
 
 The shared demo password is `Test@123`. These `.local` addresses are login IDs, not mailboxes. Set `MEDINEXUS_LOGIN_PASSWORD` before starting the API to override the demo password. This prototype keeps sessions in memory, expires them after eight hours, and invalidates them when the API restarts; use a persistent identity and session system before deploying it for real users.
 
+## Store shop data in local databases
+
+No database server is required. Python's built-in SQLite support stores the shop data in local files under `backend/data/shop_databases/`. The importer creates one database file per shop (`medinexus_shop_01.sqlite3` through `medinexus_shop_05.sqlite3`), each with the same normalized tables:
+
+- `shop_profile`: the local shop identity.
+- `medicines`: the shop's medicine catalog.
+- `sales_history`: daily sales quantities by date and medicine.
+- `inventory_batches`: current quantity and expiry details for each batch.
+
+The medicine catalog is copied into each database so shops can operate independently. Each sales row stores the sale-time unit price as well as units sold, so later catalog price changes do not rewrite historical revenue. The CSV has no discount or return fields, so dashboard sales revenue is an estimate of units sold multiplied by the recorded unit price, not accounting net revenue. Batch expiry dates are the source of inventory expiry information; the medicine catalog's older `expiry_date` is retained only as `catalog_expiry_date`.
+
+Validate all CSVs, then create/populate the local database files:
+
+```powershell
+python backend\scripts\import_shop_csvs_to_sqlite.py --validate-only
+python backend\scripts\import_shop_csvs_to_sqlite.py
+```
+
+To import just one shop, pass `--shop SHOP_01`. An import into an already populated database fails rather than overwriting data. To deliberately replace all existing rows for the selected shop or shops with the CSV contents, pass `--replace`. The importer upgrades an older database schema to add sale-time prices; reloading that shop's CSV data after the upgrade requires `--replace`. The schema is in `backend/database/schema.sql`.
+
+The authenticated API uses the signed-in account's shop ID to select that shop's database file; clients cannot request another shop's data by changing a query parameter. Start the API as usual; no database credentials or server variables are needed:
+
+```powershell
+cd backend
+python -m uvicorn main:app --reload --port 8000
+```
+
+The API routes are:
+
+- `GET /dashboard/summary?days=30`: catalog and available-stock counts, low-stock/expiring batch counts, and sales totals for the latest available sales period.
+- `GET /dashboard/sales/daily?days=30`: daily units sold and estimated sales revenue for charting.
+- `GET /dashboard/sales?limit=100&offset=0`: paginated sale history. Optional `start_date` and `end_date` must be supplied together in `YYYY-MM-DD` format.
+- `GET /dashboard/inventory?limit=200&offset=0`: batch stock, expiry, supplier, and stock status.
+
+The dashboard loads these shop-scoped endpoints from the local database files. The signed-in app opens to a Dashboard with summary metrics, a daily-sales chart, and compact paginated sales and inventory tables. Forecasting is a separate sidebar section and still uses the project's forecasting CSV/model pipeline.
+
 
 ## Run the notebook
 

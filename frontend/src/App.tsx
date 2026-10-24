@@ -1,7 +1,7 @@
 import { useState, useEffect, type FormEvent } from 'react'
 import axios from 'axios'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Activity, Package, AlertTriangle, ShoppingCart, Calendar, LogOut, Pill, ShieldCheck } from 'lucide-react'
+import { Activity, Package, AlertTriangle, ShoppingCart, Calendar, LogOut, Pill, ShieldCheck, LayoutDashboard, ChartNoAxesCombined, ChevronLeft, ChevronRight, Boxes, ReceiptText } from 'lucide-react'
 
 const API_BASE = 'http://localhost:8000'
 
@@ -22,7 +22,55 @@ interface ForecastPoint {
   forecast_units: number
 }
 
+interface DashboardSummary {
+  medicine_count: number
+  available_units: number
+  low_stock_medicines: number
+  expiring_batches: number
+  sales_units: number
+  sales_revenue: number
+  period_start: string
+  period_end: string
+  shop_id: string
+  shop_name: string
+  currency: string
+  sales_revenue_basis: string
+}
+
+interface DailySalesPoint {
+  sale_date: string
+  units_sold: number
+  sales_revenue: number
+}
+
+interface SalesHistoryRow {
+  sale_date: string
+  medicine_id: string
+  medicine_name: string
+  category: string
+  units_sold: number
+  unit_price: number
+  sales_revenue: number
+}
+
 interface Batch {
+  batch_id: string
+  batch_number: string
+  medicine_id: string
+  medicine_name: string
+  category: string
+  quantity: number
+  purchase_date: string
+  expiry_date: string
+  unit_cost: number
+  selling_price: number
+  reorder_level: number
+  supplier: string
+  stock_status: string
+  medicine_available_quantity: number
+}
+
+interface ForecastBatch {
   batch_id: string
   current_stock: number
   expiry_date: string
@@ -47,10 +95,12 @@ interface ForecastResult {
   recommended_purchase: number
   recommendation: string
   forecast: ForecastPoint[]
-  batches: Batch[]
+  batches: ForecastBatch[]
 }
 
 function App() {
+  const [dashboardSection, setDashboardSection] = useState<'dashboard' | 'forecasting'>('dashboard')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [accessToken, setAccessToken] = useState(() => localStorage.getItem('medinexus_access_token'))
   const [user, setUser] = useState<AuthenticatedUser | null>(null)
   const [authChecking, setAuthChecking] = useState(true)
@@ -65,6 +115,19 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<ForecastResult | null>(null)
   const [error, setError] = useState('')
+  const [dashboardSummary, setDashboardSummary] = useState<DashboardSummary | null>(null)
+  const [dailySales, setDailySales] = useState<DailySalesPoint[]>([])
+  const [salesHistory, setSalesHistory] = useState<SalesHistoryRow[]>([])
+  const [inventory, setInventory] = useState<Batch[]>([])
+  const [dashboardLoading, setDashboardLoading] = useState(false)
+  const [dashboardError, setDashboardError] = useState('')
+  const [salesLoading, setSalesLoading] = useState(false)
+  const [inventoryLoading, setInventoryLoading] = useState(false)
+  const [salesPage, setSalesPage] = useState(0)
+  const [inventoryPage, setInventoryPage] = useState(0)
+  const [hasMoreSales, setHasMoreSales] = useState(false)
+  const [hasMoreInventory, setHasMoreInventory] = useState(false)
+  const tablePageSize = 8
 
   useEffect(() => {
     if (!accessToken) {
@@ -91,8 +154,19 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (user && accessToken) fetchMedicines(accessToken)
+    if (user && accessToken) {
+      fetchMedicines(accessToken)
+      fetchDashboard(accessToken)
+    }
   }, [user, accessToken])
+
+  useEffect(() => {
+    if (user && accessToken) fetchSalesPage(accessToken, salesPage)
+  }, [user, accessToken, salesPage])
+
+  useEffect(() => {
+    if (user && accessToken) fetchInventoryPage(accessToken, inventoryPage)
+  }, [user, accessToken, inventoryPage])
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -135,13 +209,6 @@ function App() {
     setError('')
   }
 
-  const goHome = () => {
-    setMedicineQuery('')
-    setResult(null)
-    setError('')
-    window.scrollTo(0, 0)
-  }
-
   const fetchMedicines = async (token: string) => {
     setMedicinesLoading(true)
     setMedicinesError('')
@@ -162,6 +229,86 @@ function App() {
       setMedicinesError('Could not load medicines. Check that the Python API is running, then refresh.')
     } finally {
       setMedicinesLoading(false)
+    }
+  }
+
+  const fetchDashboard = async (token: string) => {
+    setDashboardLoading(true)
+    setDashboardError('')
+    try {
+      const headers = { Authorization: `Bearer ${token}` }
+      const [summaryResponse, dailySalesResponse] = await Promise.all([
+        axios.get<DashboardSummary>(`${API_BASE}/dashboard/summary`, { headers }),
+        axios.get<DailySalesPoint[]>(`${API_BASE}/dashboard/sales/daily`, { headers, params: { days: 30 } }),
+      ])
+      setDashboardSummary(summaryResponse.data)
+      setDailySales(dailySalesResponse.data)
+    } catch (e) {
+      console.error(e)
+      if (axios.isAxiosError(e) && e.response?.status === 401) {
+        localStorage.removeItem('medinexus_access_token')
+        setAccessToken(null)
+        setUser(null)
+        setLoginError('Your session expired. Please sign in again.')
+      } else {
+        setDashboardError(axios.isAxiosError(e) && e.response?.data?.detail
+          ? e.response.data.detail
+          : 'Could not load dashboard data. Check the Python API and this shop database file.')
+      }
+    } finally {
+      setDashboardLoading(false)
+    }
+  }
+
+  const fetchSalesPage = async (token: string, page: number) => {
+    setSalesLoading(true)
+    try {
+      const response = await axios.get<SalesHistoryRow[]>(`${API_BASE}/dashboard/sales`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { limit: tablePageSize + 1, offset: page * tablePageSize },
+      })
+      setSalesHistory(response.data.slice(0, tablePageSize))
+      setHasMoreSales(response.data.length > tablePageSize)
+    } catch (e) {
+      console.error(e)
+      if (axios.isAxiosError(e) && e.response?.status === 401) {
+        localStorage.removeItem('medinexus_access_token')
+        setAccessToken(null)
+        setUser(null)
+        setLoginError('Your session expired. Please sign in again.')
+      } else {
+        setDashboardError(axios.isAxiosError(e) && e.response?.data?.detail
+          ? e.response.data.detail
+          : 'Could not load more sales history.')
+      }
+    } finally {
+      setSalesLoading(false)
+    }
+  }
+
+  const fetchInventoryPage = async (token: string, page: number) => {
+    setInventoryLoading(true)
+    try {
+      const response = await axios.get<Batch[]>(`${API_BASE}/dashboard/inventory`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { limit: tablePageSize + 1, offset: page * tablePageSize },
+      })
+      setInventory(response.data.slice(0, tablePageSize))
+      setHasMoreInventory(response.data.length > tablePageSize)
+    } catch (e) {
+      console.error(e)
+      if (axios.isAxiosError(e) && e.response?.status === 401) {
+        localStorage.removeItem('medinexus_access_token')
+        setAccessToken(null)
+        setUser(null)
+        setLoginError('Your session expired. Please sign in again.')
+      } else {
+        setDashboardError(axios.isAxiosError(e) && e.response?.data?.detail
+          ? e.response.data.detail
+          : 'Could not load inventory data.')
+      }
+    } finally {
+      setInventoryLoading(false)
     }
   }
 
@@ -196,6 +343,9 @@ function App() {
     if (risk === 'MEDIUM') return 'text-yellow-600 bg-yellow-50'
     return 'text-green-600 bg-green-50'
   }
+
+  const formatCurrency = (amount: number) =>
+    new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(amount)
 
   if (authChecking) {
     return <div className='min-h-screen flex items-center justify-center text-gray-600'>Checking your session...</div>
@@ -277,39 +427,287 @@ function App() {
   }
 
   return (
-    <div className='min-h-screen bg-gray-50'>
-      <header className='bg-white shadow-sm border-b'>
-        <div className='flex h-20 w-full flex-nowrap items-center justify-between gap-4 px-4'>
-          <div>
-            <button
-              type='button'
-              onClick={goHome}
-              aria-label='Go to home'
-              title='Home'
-              className='flex h-20 shrink-0 items-center overflow-visible'
-            >
-              <img src='/medinexus-logo.png' alt='MediNexus' className='h-16 w-40 object-contain object-left md:h-20 md:w-60' />
-            </button>
-          </div>
-          <div className='flex shrink-0 items-center gap-3'>
-            <div className='hidden text-right sm:block'>
-              <p className='text-sm font-medium text-gray-900'>{user.shop_name}</p>
-              <p className='text-xs text-gray-600'>{user.email}</p>
-            </div>
-            <button
-              onClick={handleLogout}
-              aria-label='Sign out'
-              title='Sign out'
-              className='inline-flex items-center justify-center rounded-md border border-gray-300 p-2 text-gray-700 hover:bg-gray-50'
-            >
-              <LogOut className='w-4 h-4' />
-            </button>
-          </div>
+    <div className='flex min-h-screen flex-col bg-slate-50 lg:h-screen lg:min-h-0 lg:flex-row lg:overflow-hidden'>
+      <aside className={`flex w-full shrink-0 flex-col border-b border-slate-200 bg-white px-4 py-3 transition-[width] duration-200 lg:h-screen lg:min-h-0 lg:overflow-hidden lg:border-b-0 lg:border-r lg:py-6 ${
+        sidebarCollapsed ? 'lg:w-20 lg:px-3' : 'lg:w-64 lg:px-5'
+      }`}>
+        <div className={`mb-4 flex items-center lg:mb-8 ${sidebarCollapsed ? 'justify-center' : 'justify-between'}`}>
+          <span className={`whitespace-nowrap text-lg font-bold tracking-wide text-blue-700 ${sidebarCollapsed ? 'lg:hidden' : ''}`}>
+            MEDINEXUS
+          </span>
+          <button
+            type='button'
+            onClick={() => setSidebarCollapsed(collapsed => !collapsed)}
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!sidebarCollapsed}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            className='inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+          >
+            {sidebarCollapsed ? <ChevronRight className='h-5 w-5' /> : <ChevronLeft className='h-5 w-5' />}
+          </button>
         </div>
-      </header>
+        <nav aria-label='Main navigation' className={`flex gap-2 lg:flex-col ${sidebarCollapsed ? 'lg:items-center' : ''}`}>
+            {([
+              ['dashboard', 'Dashboard', LayoutDashboard],
+              ['forecasting', 'Forecasting', ChartNoAxesCombined],
+            ] as const).map(([section, label, Icon]) => (
+              <button
+                key={section}
+                type='button'
+                onClick={() => setDashboardSection(section)}
+                aria-current={dashboardSection === section ? 'page' : undefined}
+                title={sidebarCollapsed ? label : undefined}
+                className={`flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition lg:flex-none ${
+                  sidebarCollapsed ? 'lg:w-12 lg:px-0' : 'lg:justify-start'
+                } ${
+                  dashboardSection === section
+                    ? 'bg-blue-50 text-blue-700'
+                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                }`}
+              >
+                <Icon className='h-4 w-4' />
+                <span className={sidebarCollapsed ? 'lg:hidden' : ''}>{label}</span>
+              </button>
+            ))}
+        </nav>
+        <div className={`mt-3 flex items-center border-t border-slate-100 pt-3 lg:mt-auto lg:pt-5 ${
+          sidebarCollapsed ? 'justify-center' : 'justify-between'
+        }`}>
+          <div className={`min-w-0 ${sidebarCollapsed ? 'lg:hidden' : ''}`} title={`${user.shop_name} · ${user.email}`}>
+            <p className='truncate text-sm font-medium text-gray-900'>{user.shop_name}</p>
+            <p className='truncate text-xs text-gray-600'>{user.email}</p>
+          </div>
+          <button
+            onClick={handleLogout}
+            aria-label='Sign out'
+            title='Sign out'
+            className={`inline-flex shrink-0 items-center justify-center rounded-md border border-gray-300 p-2 text-gray-700 hover:bg-gray-50 ${
+              sidebarCollapsed ? '' : 'ml-2'
+            }`}
+          >
+            <LogOut className='w-4 h-4' />
+          </button>
+        </div>
+      </aside>
 
-      <main className='max-w-7xl mx-auto px-4 py-6'>
-        <div className='bg-white rounded-lg shadow-sm p-6 mb-6'>
+      <main className='min-h-0 min-w-0 flex-1 px-4 py-6 sm:px-6 lg:h-screen lg:overflow-y-auto lg:px-8'>
+        {dashboardError && (
+          <div role='alert' className='mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900'>
+            {dashboardError}
+          </div>
+        )}
+
+        {dashboardSection === 'dashboard' && (
+          <>
+            <section className='mb-6'>
+              <div className='mb-4 flex flex-wrap items-end justify-between gap-2'>
+                <div>
+                  <h1 className='text-2xl font-bold text-slate-900'>Shop dashboard</h1>
+                  <p className='mt-1 text-sm text-slate-500'>
+                    {user.shop_name} · {user.shop_id}
+                  </p>
+                </div>
+                {dashboardSummary && (
+                  <p className='text-xs text-slate-500'>
+                    Sales overview: {dashboardSummary.period_start} to {dashboardSummary.period_end}
+                  </p>
+                )}
+              </div>
+              {dashboardLoading && !dashboardSummary ? (
+                <div className='rounded-xl bg-white p-6 text-sm text-slate-500 shadow-sm'>Loading shop data...</div>
+              ) : dashboardSummary ? (
+                <>
+                  <div className='grid grid-cols-2 gap-4 lg:grid-cols-5'>
+                    {[
+                      { label: 'Available units', value: dashboardSummary.available_units.toLocaleString('en-IN'), detail: 'Unexpired inventory', tone: 'text-blue-700' },
+                      { label: 'Sales revenue', value: formatCurrency(dashboardSummary.sales_revenue), detail: `${dashboardSummary.sales_units.toLocaleString('en-IN')} units sold`, tone: 'text-emerald-700' },
+                      { label: 'Medicines', value: dashboardSummary.medicine_count.toLocaleString('en-IN'), detail: 'In shop catalog', tone: 'text-slate-900' },
+                      { label: 'Low stock', value: dashboardSummary.low_stock_medicines.toLocaleString('en-IN'), detail: 'Medicines at reorder level', tone: 'text-amber-700' },
+                      { label: 'Expiring soon', value: dashboardSummary.expiring_batches.toLocaleString('en-IN'), detail: 'Batches within 30 days', tone: 'text-rose-700' },
+                    ].map(card => (
+                      <div key={card.label} className='rounded-xl border border-slate-100 bg-white p-4 shadow-sm'>
+                        <p className='text-sm font-medium text-slate-500'>{card.label}</p>
+                        <p className={`mt-2 truncate text-xl font-bold ${card.tone}`}>{card.value}</p>
+                        <p className='mt-1 text-xs text-slate-400'>{card.detail}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className='mt-6 rounded-xl border border-slate-100 bg-white p-5 shadow-sm'>
+                    <div className='mb-4 flex flex-wrap items-start justify-between gap-2'>
+                      <div>
+                        <h2 className='text-lg font-semibold text-slate-900'>Daily sales revenue</h2>
+                        <p className='text-sm text-slate-500'>30 days through the latest recorded sale · units sold × recorded unit price</p>
+                      </div>
+                      <button
+                        type='button'
+                        onClick={() => setDashboardSection('forecasting')}
+                        className='text-sm font-medium text-blue-700 hover:text-blue-900'
+                      >
+                        Open forecasting
+                      </button>
+                    </div>
+                    {dailySales.length > 0 ? (
+                      <ResponsiveContainer width='100%' height={280}>
+                        <LineChart data={dailySales}>
+                          <CartesianGrid strokeDasharray='3 3' />
+                          <XAxis dataKey='sale_date' tick={{ fontSize: 11 }} tickFormatter={value => String(value).slice(5)} />
+                          <YAxis tick={{ fontSize: 11 }} tickFormatter={value => `₹${Number(value) >= 1000 ? `${(Number(value) / 1000).toFixed(0)}k` : value}`} />
+                          <Tooltip formatter={value => [formatCurrency(Number(value)), 'Sales revenue']} />
+                          <Line type='monotone' dataKey='sales_revenue' stroke='#0f766e' strokeWidth={2} dot={false} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <p className='py-12 text-center text-sm text-slate-500'>No sales recorded in the last 30 days.</p>
+                    )}
+                    <p className='mt-2 text-xs text-slate-400'>{dashboardSummary.sales_revenue_basis}</p>
+                  </div>
+                </>
+              ) : (
+                <div className='rounded-xl bg-white p-6 text-sm text-slate-500 shadow-sm'>
+                  Shop dashboard data is not available. Confirm the local SQLite database for this shop has been imported.
+                  {dashboardLoading && <span className='ml-2'>Loading...</span>}
+                </div>
+              )}
+            </section>
+
+            <section className='grid grid-cols-1 gap-5 xl:grid-cols-2'>
+              <div className='overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm'>
+                <div className='flex items-center justify-between border-b border-slate-100 px-4 py-3'>
+                  <div className='flex items-center gap-2'>
+                    <ReceiptText className='h-4 w-4 text-emerald-700' />
+                    <h2 className='font-semibold text-slate-900'>Recent sales</h2>
+                  </div>
+                  <span className='text-xs text-slate-500'>Page {salesPage + 1}</span>
+                </div>
+                <div className='h-[330px] overflow-auto'>
+                  <table className='min-w-full divide-y divide-slate-100 text-xs'>
+                    <thead className='sticky top-0 bg-slate-50 text-left uppercase tracking-wide text-slate-500'>
+                      <tr>
+                        <th className='px-3 py-2.5 font-medium'>Date</th>
+                        <th className='px-3 py-2.5 font-medium'>Medicine</th>
+                        <th className='px-3 py-2.5 text-right font-medium'>Units</th>
+                        <th className='px-3 py-2.5 text-right font-medium'>Revenue*</th>
+                      </tr>
+                    </thead>
+                    <tbody className='divide-y divide-slate-50'>
+                      {salesHistory.map((sale, index) => (
+                        <tr key={`${sale.sale_date}-${sale.medicine_id}-${index}`} className='hover:bg-slate-50'>
+                          <td className='whitespace-nowrap px-3 py-2.5 text-slate-500'>{sale.sale_date}</td>
+                          <td className='max-w-36 truncate px-3 py-2.5 font-medium text-slate-800' title={sale.medicine_name}>{sale.medicine_name}</td>
+                          <td className='px-3 py-2.5 text-right text-slate-600'>{sale.units_sold.toLocaleString('en-IN')}</td>
+                          <td className='whitespace-nowrap px-3 py-2.5 text-right font-medium text-slate-800'>{formatCurrency(sale.sales_revenue)}</td>
+                        </tr>
+                      ))}
+                      {salesLoading && salesHistory.length === 0 && (
+                        <tr><td colSpan={4} className='px-3 py-10 text-center text-slate-400'>Loading sales...</td></tr>
+                      )}
+                      {!salesLoading && salesHistory.length === 0 && (
+                        <tr><td colSpan={4} className='px-3 py-10 text-center text-slate-400'>No sales history available.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className='flex h-12 items-center justify-between border-t border-slate-100 px-3'>
+                  <span className='text-xs text-slate-400'>*Estimated from units × unit price</span>
+                  <div className='flex items-center gap-1'>
+                    <button
+                      type='button'
+                      onClick={() => setSalesPage(page => Math.max(0, page - 1))}
+                      disabled={salesPage === 0 || salesLoading}
+                      aria-label='Previous sales page'
+                      className='rounded-md p-1.5 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35'
+                    >
+                      <ChevronLeft className='h-4 w-4' />
+                    </button>
+                    <button
+                      type='button'
+                      onClick={() => setSalesPage(page => page + 1)}
+                      disabled={!hasMoreSales || salesLoading}
+                      aria-label='Next sales page'
+                      className='rounded-md p-1.5 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35'
+                    >
+                      <ChevronRight className='h-4 w-4' />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className='overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm'>
+                <div className='flex items-center justify-between border-b border-slate-100 px-4 py-3'>
+                  <div className='flex items-center gap-2'>
+                    <Boxes className='h-4 w-4 text-blue-700' />
+                    <h2 className='font-semibold text-slate-900'>Inventory batches</h2>
+                  </div>
+                  <span className='text-xs text-slate-500'>Page {inventoryPage + 1}</span>
+                </div>
+                <div className='h-[330px] overflow-auto'>
+                  <table className='min-w-full divide-y divide-slate-100 text-xs'>
+                    <thead className='sticky top-0 bg-slate-50 text-left uppercase tracking-wide text-slate-500'>
+                      <tr>
+                        <th className='px-3 py-2.5 font-medium'>Medicine / batch</th>
+                        <th className='px-3 py-2.5 text-right font-medium'>Qty</th>
+                        <th className='px-3 py-2.5 font-medium'>Expiry</th>
+                        <th className='px-3 py-2.5 font-medium'>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className='divide-y divide-slate-50'>
+                      {inventory.map(batch => (
+                        <tr key={batch.batch_id} className='hover:bg-slate-50'>
+                          <td className='max-w-40 px-3 py-2.5'>
+                            <p className='truncate font-medium text-slate-800' title={batch.medicine_name}>{batch.medicine_name}</p>
+                            <p className='truncate text-slate-400'>{batch.batch_number}</p>
+                          </td>
+                          <td className='whitespace-nowrap px-3 py-2.5 text-right text-slate-700'>{batch.quantity.toLocaleString('en-IN')}</td>
+                          <td className='whitespace-nowrap px-3 py-2.5 text-slate-500'>{batch.expiry_date}</td>
+                          <td className='whitespace-nowrap px-3 py-2.5'>
+                            <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
+                              batch.stock_status === 'IN STOCK' ? 'bg-emerald-50 text-emerald-700'
+                                : batch.stock_status === 'LOW STOCK' ? 'bg-amber-50 text-amber-700'
+                                  : 'bg-rose-50 text-rose-700'
+                            }`}>{batch.stock_status}</span>
+                          </td>
+                        </tr>
+                      ))}
+                      {inventoryLoading && inventory.length === 0 && (
+                        <tr><td colSpan={4} className='px-3 py-10 text-center text-slate-400'>Loading inventory...</td></tr>
+                      )}
+                      {!inventoryLoading && inventory.length === 0 && (
+                        <tr><td colSpan={4} className='px-3 py-10 text-center text-slate-400'>No inventory batches available.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className='flex h-12 items-center justify-between border-t border-slate-100 px-3'>
+                  <span className='text-xs text-slate-400'>Batch-level quantities</span>
+                  <div className='flex items-center gap-1'>
+                    <button
+                      type='button'
+                      onClick={() => setInventoryPage(page => Math.max(0, page - 1))}
+                      disabled={inventoryPage === 0 || inventoryLoading}
+                      aria-label='Previous inventory page'
+                      className='rounded-md p-1.5 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35'
+                    >
+                      <ChevronLeft className='h-4 w-4' />
+                    </button>
+                    <button
+                      type='button'
+                      onClick={() => setInventoryPage(page => page + 1)}
+                      disabled={!hasMoreInventory || inventoryLoading}
+                      aria-label='Next inventory page'
+                      className='rounded-md p-1.5 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35'
+                    >
+                      <ChevronRight className='h-4 w-4' />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </>
+        )}
+
+        {dashboardSection === 'forecasting' && (
+          <>
+            <div className='bg-white rounded-lg shadow-sm p-6 mb-6'>
           <h2 className='text-xl font-semibold mb-4 flex items-center gap-2'>
             <Package className='w-5 h-5' />
             Forecast Configuration
@@ -345,7 +743,7 @@ function App() {
           {error && <p className='mt-2 text-red-600 text-sm'>{error}</p>}
         </div>
 
-        {result && (
+            {result && (
           <>
             <div className='bg-white rounded-lg shadow-sm p-6 mb-6'>
               <h2 className='text-xl font-semibold mb-4'>{result.medicine_name} ({result.medicine_id})</h2>
@@ -468,7 +866,10 @@ function App() {
               )}
             </div>
           </>
+            )}
+          </>
         )}
+
       </main>
     </div>
   )
