@@ -117,7 +117,9 @@ Open the local URL printed by Vite. Sign in with the email assigned to a shop; e
 
 The shared demo password is `Test@123`. These `.local` addresses are login IDs, not mailboxes. Set `MEDINEXUS_LOGIN_PASSWORD` before starting the API to override the demo password. This prototype keeps sessions in memory, expires them after eight hours, and invalidates them when the API restarts; use a persistent identity and session system before deploying it for real users.
 
-The AI Chatbot uses Groq's `openai/gpt-oss-120b` model. Set `GROQ_API_KEY` in the backend terminal before starting the API; keep the key out of frontend files and source control. For PowerShell, run `$env:GROQ_API_KEY = 'your-groq-api-key'`. Chat answers are based on the signed-in shop's SQLite inventory and supplier records. Chat histories are saved in browser local storage under the signed-in email, so they remain on that browser/device and are not synced elsewhere. This schema does not currently store purchase orders, so the chatbot cannot report existing order status.
+Copy the checked-in `.env.example` to `.env` in the project root and add local settings there. The backend loads `.env` at startup; existing process environment variables take precedence. `.env` is ignored by Git, while `.env.example` is safe to check in. The AI Chatbot uses Groq's `openai/gpt-oss-120b` model and reads `GROQ_API_KEY` from this config. Chat answers are based on the signed-in shop's SQLite inventory and supplier records. Chat histories are saved in browser local storage under the signed-in email, so they remain on that browser/device and are not synced elsewhere. This schema does not currently store purchase orders, so the chatbot cannot report existing order status.
+
+Forecast reports can be downloaded as PDFs or emailed from the Forecasting view. Email delivery reads `SMTP_HOST`, `SMTP_FROM_EMAIL`, `SMTP_PORT` (defaults to `587`), `SMTP_USERNAME`, `SMTP_PASSWORD`, and `SMTP_USE_SSL` (`true` for implicit SSL, typically port `465`; otherwise STARTTLS is used) from `.env`. The recipient address is validated in the form and again by the API.
 
 ## Store shop data in local databases
 
@@ -153,6 +155,8 @@ The API routes are:
 - `GET /dashboard/sales?limit=100&offset=0`: optional paginated sale history API. Optional `start_date` and `end_date` must be supplied together in `YYYY-MM-DD` format.
 - `GET /dashboard/inventory?limit=200&offset=0`: batch stock, expiry, supplier, and stock status.
 - `POST /dashboard/chat`: stream an inventory-grounded chatbot response for the signed-in shop.
+- `POST /forecast/pdf`: create a PDF of the current forecast for download.
+- `POST /forecast/email`: email the current forecast PDF to a validated recipient using configured SMTP.
 - `POST /dashboard/inventory`: add a supply batch to the signed-in shop's database.
 - `PUT /dashboard/inventory/{batch_id}`: update a batch in the signed-in shop's database.
 - `DELETE /dashboard/inventory/{batch_id}`: delete a batch from the signed-in shop's database.

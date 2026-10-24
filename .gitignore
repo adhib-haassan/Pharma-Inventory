@@ -2,3 +2,6 @@ backend/data/shop_databases/*.sqlite3
 backend/data/shop_databases/*.sqlite3-journal
 backend/data/shop_databases/*.sqlite3-shm
 backend/data/shop_databases/*.sqlite3-wal
+.env
+.env.*
+!.env.example

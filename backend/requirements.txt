@@ -8,3 +8,5 @@ jupyter
 fastapi
 uvicorn
 groq
+reportlab
+python-dotenv

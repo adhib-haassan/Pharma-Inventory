@@ -1,7 +1,7 @@
 import { useState, useEffect, type FormEvent, type ReactNode } from 'react'
 import axios from 'axios'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Activity, Package, AlertTriangle, ShoppingCart, Calendar, LogOut, Pill, ShieldCheck, LayoutDashboard, ChartNoAxesCombined, ChevronLeft, ChevronRight, Boxes, Plus, Pencil, Trash2, X, MessageCircle, Send } from 'lucide-react'
+import { Activity, Package, AlertTriangle, ShoppingCart, Calendar, LogOut, Pill, ShieldCheck, LayoutDashboard, ChartNoAxesCombined, ChevronLeft, ChevronRight, Boxes, Plus, Pencil, Trash2, X, MessageCircle, Send, Download, Mail } from 'lucide-react'
 
 const API_BASE = 'http://localhost:8000'
 
@@ -245,6 +245,12 @@ function App() {
   const [chatDraft, setChatDraft] = useState('')
   const [chatLoading, setChatLoading] = useState(false)
   const [chatError, setChatError] = useState('')
+  const [pdfLoading, setPdfLoading] = useState(false)
+  const [emailModalOpen, setEmailModalOpen] = useState(false)
+  const [forecastEmail, setForecastEmail] = useState('')
+  const [emailSending, setEmailSending] = useState(false)
+  const [emailError, setEmailError] = useState('')
+  const [emailSent, setEmailSent] = useState('')
   const tablePageSize = 8
   const chatMessages = chatThreads.find(thread => thread.id === activeChatId)?.messages ?? []
   const chatStorageKey = user ? `medinexus_ai_chats:${user.email.toLowerCase()}` : null
@@ -572,6 +578,64 @@ function App() {
       setError(e.response?.data?.detail || 'Failed to get forecast')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleDownloadForecast = async () => {
+    if (!result || !accessToken) return
+    setPdfLoading(true)
+    setError('')
+    try {
+      const response = await axios.post(`${API_BASE}/forecast/pdf`, result, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        responseType: 'blob',
+      })
+      const url = URL.createObjectURL(response.data)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `forecast_${result.medicine_id}.pdf`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      if (axios.isAxiosError(e) && e.response?.status === 401) {
+        await handleLogout()
+        setLoginError('Your session expired. Please sign in again.')
+        return
+      }
+      setError(axios.isAxiosError(e) && typeof e.response?.data?.detail === 'string'
+        ? e.response.data.detail
+        : 'Could not export the forecast PDF.')
+    } finally {
+      setPdfLoading(false)
+    }
+  }
+
+  const handleEmailForecast = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!result || !accessToken) return
+    setEmailSending(true)
+    setEmailError('')
+    setEmailSent('')
+    try {
+      await axios.post(`${API_BASE}/forecast/email`, { email: forecastEmail.trim(), forecast: result }, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      })
+      setEmailSent(`Forecast PDF sent to ${forecastEmail.trim()}.`)
+      setEmailModalOpen(false)
+      setForecastEmail('')
+    } catch (e) {
+      if (axios.isAxiosError(e) && e.response?.status === 401) {
+        await handleLogout()
+        setLoginError('Your session expired. Please sign in again.')
+        return
+      }
+      setEmailError(axios.isAxiosError(e) && typeof e.response?.data?.detail === 'string'
+        ? e.response.data.detail
+        : 'Could not send the forecast email.')
+    } finally {
+      setEmailSending(false)
     }
   }
 
@@ -1294,7 +1358,23 @@ function App() {
             {result && (
           <>
             <div className='bg-white rounded-lg shadow-sm p-6 mb-6'>
-              <h2 className='text-xl font-semibold mb-4'>{result.medicine_name} ({result.medicine_id})</h2>
+              <div className='mb-3 flex flex-wrap items-start justify-between gap-3'>
+                <h2 className='text-lg font-semibold text-slate-900'>{result.medicine_name} <span className='text-sm font-medium text-slate-500'>({result.medicine_id})</span></h2>
+                <div className='flex flex-wrap gap-2'>
+                  <button
+                    type='button'
+                    onClick={handleDownloadForecast}
+                    disabled={pdfLoading}
+                    className='inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50'
+                  ><Download className='h-4 w-4' />{pdfLoading ? 'Preparing PDF…' : 'Save PDF'}</button>
+                  <button
+                    type='button'
+                    onClick={() => { setForecastEmail(''); setEmailError(''); setEmailModalOpen(true) }}
+                    className='inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-800'
+                  ><Mail className='h-4 w-4' />Email PDF</button>
+                </div>
+              </div>
+              {emailSent && <p role='status' className='mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-800'>{emailSent}</p>}
               <div className='grid grid-cols-2 md:grid-cols-4 gap-4 text-sm'>
                 <div><span className='text-gray-600'>Category:</span> <span className='font-medium'>{result.category}</span></div>
                 <div><span className='text-gray-600'>Shop:</span> <span className='font-medium'>{result.shop_id}</span></div>
@@ -1416,6 +1496,44 @@ function App() {
           </>
             )}
           </>
+        )}
+
+        {emailModalOpen && result && (
+          <div className='fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4'>
+            <section role='dialog' aria-modal='true' aria-labelledby='forecast-email-title' className='w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl'>
+              <div className='mb-4 flex items-start justify-between gap-3'>
+                <div>
+                  <h2 id='forecast-email-title' className='text-lg font-semibold text-slate-900'>Email forecast PDF</h2>
+                  <p className='mt-1 text-sm text-slate-500'>Send the {result.medicine_name} report as a PDF attachment.</p>
+                </div>
+                <button type='button' onClick={() => setEmailModalOpen(false)} disabled={emailSending} aria-label='Close email dialog' className='rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 disabled:opacity-50'>
+                  <X className='h-5 w-5' />
+                </button>
+              </div>
+              <form onSubmit={handleEmailForecast} className='space-y-4'>
+                <label className='block text-sm font-medium text-slate-700' htmlFor='forecast-recipient-email'>Recipient email
+                  <input
+                    id='forecast-recipient-email'
+                    type='email'
+                    required
+                    maxLength={254}
+                    autoComplete='email'
+                    value={forecastEmail}
+                    onChange={event => setForecastEmail(event.target.value)}
+                    placeholder='name@example.com'
+                    className='mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100'
+                  />
+                </label>
+                {emailError && <p role='alert' className='rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700'>{emailError}</p>}
+                <div className='flex justify-end gap-2 border-t border-slate-100 pt-4'>
+                  <button type='button' onClick={() => setEmailModalOpen(false)} disabled={emailSending} className='rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50'>Cancel</button>
+                  <button type='submit' disabled={emailSending || !forecastEmail.trim()} className='inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50'>
+                    <Mail className='h-4 w-4' />{emailSending ? 'Sending…' : 'Send PDF'}
+                  </button>
+                </div>
+              </form>
+            </section>
+          </div>
         )}
 
       </main>

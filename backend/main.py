@@ -15,12 +15,21 @@ import sys
 import json
 import os
 import logging
+import smtplib
+import ssl
+from email.message import EmailMessage
+from email.utils import parseaddr
+from io import BytesIO
 from typing import Literal
 from fastapi.responses import StreamingResponse
 
 # Add backend dir to path
 BACKEND_DIR = Path(__file__).parent
 SHOP_DATABASE_DIRECTORY = BACKEND_DIR / 'data' / 'shop_databases'
+from dotenv import load_dotenv
+
+load_dotenv(BACKEND_DIR.parent / '.env')
+
 sys.path.insert(0, str(BACKEND_DIR))
 
 from MediNexus_Terminal_Forecast import (
@@ -51,6 +60,44 @@ class ChatMessage(BaseModel):
 
 class InventoryChatRequest(BaseModel):
     messages: list[ChatMessage]
+
+
+class ForecastReportPoint(BaseModel):
+    date: str
+    forecast_units: float
+
+
+class ForecastReportBatch(BaseModel):
+    batch_id: str
+    current_stock: float
+    expiry_date: str
+    days_to_expiry: int
+
+
+class ForecastReportData(BaseModel):
+    medicine_id: str
+    medicine_name: str
+    category: str
+    shop_id: str
+    model: str
+    sales_history_through: str
+    current_stock: float
+    forecast_30d: float
+    avg_daily_demand: float
+    nearest_expiry_days: int
+    forecast_before_expiry: float
+    potential_excess: float
+    expiry_risk: str
+    stockout_risk: str
+    recommended_purchase: int
+    recommendation: str
+    forecast: list[ForecastReportPoint]
+    batches: list[ForecastReportBatch]
+
+
+class ForecastEmailRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    forecast: ForecastReportData
 
 
 class InventoryBatchInput(BaseModel):
@@ -739,6 +786,204 @@ def get_forecast(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def build_forecast_pdf(report: ForecastReportData) -> bytes:
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import inch
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from xml.sax.saxutils import escape
+
+    output = BytesIO()
+    document = SimpleDocTemplate(
+        output,
+        pagesize=letter,
+        rightMargin=0.55 * inch,
+        leftMargin=0.55 * inch,
+        topMargin=0.5 * inch,
+        bottomMargin=0.5 * inch,
+        title=f'30-Day Forecast - {report.medicine_name}',
+        author='MediNexus',
+    )
+    base = getSampleStyleSheet()
+    title_style = ParagraphStyle('ReportTitle', parent=base['Title'], fontSize=19, leading=23, textColor=colors.HexColor('#173b75'), alignment=TA_CENTER, spaceAfter=5)
+    sub_style = ParagraphStyle('ReportSub', parent=base['Normal'], fontSize=9, leading=12, textColor=colors.HexColor('#526174'), alignment=TA_CENTER)
+    section_style = ParagraphStyle('ReportSection', parent=base['Heading2'], fontSize=11, leading=14, textColor=colors.HexColor('#1e3a5f'), spaceBefore=10, spaceAfter=5)
+    body_style = ParagraphStyle('ReportBody', parent=base['BodyText'], fontSize=8.5, leading=11)
+    metric_style = ParagraphStyle('ReportMetric', parent=base['BodyText'], fontSize=8, leading=11, alignment=TA_CENTER, textColor=colors.HexColor('#334155'))
+    story = [
+        Paragraph('MediNexus Forecast Report', title_style),
+        Paragraph(f'{escape(report.medicine_name)} ({escape(report.medicine_id)}) &nbsp;·&nbsp; {escape(report.shop_id)} &nbsp;·&nbsp; Generated {date.today().isoformat()}', sub_style),
+        Spacer(1, 12),
+    ]
+
+    metrics = [
+        ('CURRENT STOCK', f'{report.current_stock:,.0f} units'),
+        ('30-DAY DEMAND', f'{report.forecast_30d:,.1f} units'),
+        ('AVERAGE / DAY', f'{report.avg_daily_demand:,.2f} units'),
+        ('RECOMMENDED BUY', f'{report.recommended_purchase:,} units'),
+        ('STOCKOUT RISK', escape(report.stockout_risk)),
+        ('EXPIRY RISK', escape(report.expiry_risk)),
+        ('NEAREST EXPIRY', f'{report.nearest_expiry_days} days'),
+        ('POTENTIAL EXCESS', f'{report.potential_excess:,.1f} units'),
+    ]
+    metric_cells = [Paragraph(f'<b>{label}</b><br/><font size="11">{value}</font>', metric_style) for label, value in metrics]
+    metric_rows = [metric_cells[:4], metric_cells[4:]]
+    metric_table = Table(metric_rows, colWidths=[1.8 * inch] * 4, rowHeights=[0.52 * inch] * 2)
+    metric_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f1f5f9')),
+        ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#dbe3ed')),
+        ('INNERGRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#dbe3ed')),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+    ]))
+    story.extend([metric_table, Paragraph('Recommendation', section_style), Paragraph(escape(report.recommendation), body_style)])
+
+    story.append(Paragraph('30-Day Daily Forecast', section_style))
+    forecast_pairs = []
+    points = report.forecast[:30]
+    for start in range(0, len(points), 3):
+        row = []
+        for point in points[start:start + 3]:
+            row.extend([escape(point.date), f'{point.forecast_units:,.1f} units'])
+        while len(row) < 6:
+            row.extend(['', ''])
+        forecast_pairs.append(row)
+    if forecast_pairs:
+        demand_table = Table([['Date', 'Demand', 'Date', 'Demand', 'Date', 'Demand'], *forecast_pairs], colWidths=[0.85 * inch, 0.75 * inch] * 3, repeatRows=1)
+        demand_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#eaf0f8')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#334155')),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 7.5),
+            ('GRID', (0, 0), (-1, -1), 0.35, colors.HexColor('#dbe3ed')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8fafc')]),
+            ('LEFTPADDING', (0, 0), (-1, -1), 5),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]))
+        story.append(demand_table)
+
+    story.append(Paragraph('FEFO Inventory Batches', section_style))
+    batch_rows = [['Batch', 'Stock', 'Expiry', 'Days to expiry']]
+    batch_rows.extend([
+        [escape(batch.batch_id), f'{batch.current_stock:,.0f}', escape(batch.expiry_date), str(batch.days_to_expiry)]
+        for batch in report.batches[:10]
+    ])
+    if len(batch_rows) == 1:
+        batch_rows.append(['No batch data available', '', '', ''])
+    batch_table = Table(batch_rows, colWidths=[2.7 * inch, 1.0 * inch, 1.25 * inch, 1.3 * inch], repeatRows=1)
+    batch_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#eaf0f8')),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.35, colors.HexColor('#dbe3ed')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8fafc')]),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    story.append(batch_table)
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(
+        f'Category: {escape(report.category)} &nbsp;·&nbsp; Model: {escape(report.model)} &nbsp;·&nbsp; Sales data through {escape(report.sales_history_through)}',
+        sub_style,
+    ))
+    document.build(story)
+    return output.getvalue()
+
+
+@app.post('/forecast/pdf')
+def download_forecast_pdf(
+    report: ForecastReportData,
+    current_user: dict = Depends(get_current_user),
+):
+    if report.shop_id != current_user['shop_id']:
+        raise HTTPException(status_code=403, detail='This forecast belongs to a different shop')
+    if len(report.forecast) > 30 or len(report.batches) > 10:
+        raise HTTPException(status_code=422, detail='Forecast reports are limited to 30 days and 10 batches')
+    try:
+        pdf = build_forecast_pdf(report)
+    except ImportError as error:
+        raise HTTPException(status_code=503, detail='Install backend requirements to export forecast PDFs.') from error
+    filename = f'forecast_{report.medicine_id}.pdf'
+    return StreamingResponse(
+        BytesIO(pdf),
+        media_type='application/pdf',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post('/forecast/email')
+def email_forecast_pdf(
+    request: ForecastEmailRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    recipient = request.email.strip()
+    parsed_address = parseaddr(recipient)[1]
+    local_part, _, domain = recipient.rpartition('@')
+    valid_email = (
+        parsed_address == recipient
+        and bool(re.fullmatch(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+", recipient))
+        and not local_part.startswith('.')
+        and not local_part.endswith('.')
+        and '..' not in local_part
+        and '..' not in domain
+    )
+    if not valid_email:
+        raise HTTPException(status_code=422, detail='Enter a valid email address')
+    if request.forecast.shop_id != current_user['shop_id']:
+        raise HTTPException(status_code=403, detail='This forecast belongs to a different shop')
+    if len(request.forecast.forecast) > 30 or len(request.forecast.batches) > 10:
+        raise HTTPException(status_code=422, detail='Forecast reports are limited to 30 days and 10 batches')
+
+    smtp_host = os.environ.get('SMTP_HOST')
+    smtp_from = os.environ.get('SMTP_FROM_EMAIL')
+    if not smtp_host or not smtp_from:
+        raise HTTPException(status_code=503, detail='Configure SMTP_HOST and SMTP_FROM_EMAIL to send forecast emails.')
+    try:
+        pdf = build_forecast_pdf(request.forecast)
+    except ImportError as error:
+        raise HTTPException(status_code=503, detail='Install backend requirements to email forecast PDFs.') from error
+
+    message = EmailMessage()
+    safe_medicine_name = re.sub(r'[\r\n]+', ' ', request.forecast.medicine_name)
+    message['Subject'] = f"MediNexus forecast: {safe_medicine_name} ({request.forecast.medicine_id})"
+    message['From'] = smtp_from
+    message['To'] = recipient
+    message.set_content(
+        f"Attached is the 30-day inventory forecast for {request.forecast.medicine_name} "
+        f"({request.forecast.medicine_id}) at {request.forecast.shop_id}."
+    )
+    message.add_attachment(
+        pdf,
+        maintype='application',
+        subtype='pdf',
+        filename=f'forecast_{request.forecast.medicine_id}.pdf',
+    )
+
+    smtp_port = int(os.environ.get('SMTP_PORT', '587'))
+    smtp_username = os.environ.get('SMTP_USERNAME')
+    smtp_password = os.environ.get('SMTP_PASSWORD')
+    use_ssl = os.environ.get('SMTP_USE_SSL', '').lower() in {'1', 'true', 'yes'}
+    try:
+        smtp_class = smtplib.SMTP_SSL if use_ssl else smtplib.SMTP
+        with smtp_class(smtp_host, smtp_port, timeout=20, **({'context': ssl.create_default_context()} if use_ssl else {})) as server:
+            if not use_ssl:
+                server.starttls(context=ssl.create_default_context())
+            if smtp_username:
+                server.login(smtp_username, smtp_password or '')
+            server.send_message(message)
+    except Exception as error:
+        LOGGER.exception('Could not send forecast email for shop %s', current_user['shop_id'])
+        raise HTTPException(status_code=502, detail='Could not send the email. Check the SMTP settings and try again.') from error
+    return {'status': 'sent', 'email': recipient}
 
 if __name__ == '__main__':
     import uvicorn
