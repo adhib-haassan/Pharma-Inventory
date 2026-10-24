@@ -146,12 +146,15 @@ python -m uvicorn main:app --reload --port 8000
 
 The API routes are:
 
-- `GET /dashboard/summary?days=30`: catalog and available-stock counts, low-stock/expiring batch counts, and sales totals for the latest available sales period.
-- `GET /dashboard/sales/daily?days=30`: daily units sold and estimated sales revenue for charting.
-- `GET /dashboard/sales?limit=100&offset=0`: paginated sale history. Optional `start_date` and `end_date` must be supplied together in `YYYY-MM-DD` format.
+- `GET /dashboard/summary`: catalog and available-stock counts, low-stock/expiring batch counts, and total batch count.
+- `GET /dashboard/sales/daily?days=30`: optional daily sales aggregates for future sales views.
+- `GET /dashboard/sales?limit=100&offset=0`: optional paginated sale history API. Optional `start_date` and `end_date` must be supplied together in `YYYY-MM-DD` format.
 - `GET /dashboard/inventory?limit=200&offset=0`: batch stock, expiry, supplier, and stock status.
+- `POST /dashboard/inventory`: add a supply batch to the signed-in shop's database.
+- `PUT /dashboard/inventory/{batch_id}`: update a batch in the signed-in shop's database.
+- `DELETE /dashboard/inventory/{batch_id}`: delete a batch from the signed-in shop's database.
 
-The dashboard loads these shop-scoped endpoints from the local database files. The signed-in app opens to a Dashboard with summary metrics, a daily-sales chart, and compact paginated sales and inventory tables. Forecasting is a separate sidebar section and still uses the project's forecasting CSV/model pipeline.
+Inventory changes are validated and saved only to the signed-in shop's local SQLite database. The Dashboard focuses on stock levels and expiring/low-stock items, with a paginated inventory table and controls to add, edit, or delete batches. Forecasting is a separate sidebar section and continues to use the project's forecasting CSV/model pipeline for demand history, while using current batch inventory from the shop database.
 
 
 ## Run the notebook

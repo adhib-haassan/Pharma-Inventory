@@ -1,7 +1,7 @@
 import { useState, useEffect, type FormEvent } from 'react'
 import axios from 'axios'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Activity, Package, AlertTriangle, ShoppingCart, Calendar, LogOut, Pill, ShieldCheck, LayoutDashboard, ChartNoAxesCombined, ChevronLeft, ChevronRight, Boxes, ReceiptText } from 'lucide-react'
+import { Activity, Package, AlertTriangle, ShoppingCart, Calendar, LogOut, Pill, ShieldCheck, LayoutDashboard, ChartNoAxesCombined, ChevronLeft, ChevronRight, Boxes, Plus, Pencil, Trash2, X } from 'lucide-react'
 
 const API_BASE = 'http://localhost:8000'
 
@@ -24,33 +24,12 @@ interface ForecastPoint {
 
 interface DashboardSummary {
   medicine_count: number
+  batch_count: number
   available_units: number
   low_stock_medicines: number
   expiring_batches: number
-  sales_units: number
-  sales_revenue: number
-  period_start: string
-  period_end: string
   shop_id: string
   shop_name: string
-  currency: string
-  sales_revenue_basis: string
-}
-
-interface DailySalesPoint {
-  sale_date: string
-  units_sold: number
-  sales_revenue: number
-}
-
-interface SalesHistoryRow {
-  sale_date: string
-  medicine_id: string
-  medicine_name: string
-  category: string
-  units_sold: number
-  unit_price: number
-  sales_revenue: number
 }
 
 interface Batch {
@@ -68,6 +47,18 @@ interface Batch {
   supplier: string
   stock_status: string
   medicine_available_quantity: number
+}
+
+interface InventoryBatchForm {
+  medicine_id: string
+  batch_number: string
+  quantity: string
+  purchase_date: string
+  expiry_date: string
+  unit_cost: string
+  selling_price: string
+  reorder_level: string
+  supplier: string
 }
 
 interface ForecastBatch {
@@ -98,6 +89,22 @@ interface ForecastResult {
   batches: ForecastBatch[]
 }
 
+function emptyInventoryBatchForm(): InventoryBatchForm {
+  const now = new Date()
+  const today = new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
+  return {
+    medicine_id: '',
+    batch_number: '',
+    quantity: '',
+    purchase_date: today,
+    expiry_date: '',
+    unit_cost: '',
+    selling_price: '',
+    reorder_level: '0',
+    supplier: '',
+  }
+}
+
 function App() {
   const [dashboardSection, setDashboardSection] = useState<'dashboard' | 'forecasting'>('dashboard')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -116,17 +123,17 @@ function App() {
   const [result, setResult] = useState<ForecastResult | null>(null)
   const [error, setError] = useState('')
   const [dashboardSummary, setDashboardSummary] = useState<DashboardSummary | null>(null)
-  const [dailySales, setDailySales] = useState<DailySalesPoint[]>([])
-  const [salesHistory, setSalesHistory] = useState<SalesHistoryRow[]>([])
   const [inventory, setInventory] = useState<Batch[]>([])
   const [dashboardLoading, setDashboardLoading] = useState(false)
   const [dashboardError, setDashboardError] = useState('')
-  const [salesLoading, setSalesLoading] = useState(false)
   const [inventoryLoading, setInventoryLoading] = useState(false)
-  const [salesPage, setSalesPage] = useState(0)
   const [inventoryPage, setInventoryPage] = useState(0)
-  const [hasMoreSales, setHasMoreSales] = useState(false)
   const [hasMoreInventory, setHasMoreInventory] = useState(false)
+  const [inventoryModalOpen, setInventoryModalOpen] = useState(false)
+  const [editingBatchId, setEditingBatchId] = useState<string | null>(null)
+  const [inventoryForm, setInventoryForm] = useState<InventoryBatchForm>(emptyInventoryBatchForm())
+  const [inventorySaving, setInventorySaving] = useState(false)
+  const [inventoryMessage, setInventoryMessage] = useState('')
   const tablePageSize = 8
 
   useEffect(() => {
@@ -161,10 +168,6 @@ function App() {
   }, [user, accessToken])
 
   useEffect(() => {
-    if (user && accessToken) fetchSalesPage(accessToken, salesPage)
-  }, [user, accessToken, salesPage])
-
-  useEffect(() => {
     if (user && accessToken) fetchInventoryPage(accessToken, inventoryPage)
   }, [user, accessToken, inventoryPage])
 
@@ -181,6 +184,10 @@ function App() {
         shop_id: res.data.shop_id,
         shop_name: res.data.shop_name,
       })
+      setDashboardSection('dashboard')
+      setInventory([])
+      setDashboardSummary(null)
+      setInventoryPage(0)
       setMedicineQuery('')
       setResult(null)
     } catch (e: any) {
@@ -204,6 +211,11 @@ function App() {
     setAccessToken(null)
     setUser(null)
     setMedicines([])
+    setInventory([])
+    setDashboardSummary(null)
+    setDashboardError('')
+    setInventoryMessage('')
+    setInventoryPage(0)
     setMedicineQuery('')
     setResult(null)
     setError('')
@@ -237,12 +249,8 @@ function App() {
     setDashboardError('')
     try {
       const headers = { Authorization: `Bearer ${token}` }
-      const [summaryResponse, dailySalesResponse] = await Promise.all([
-        axios.get<DashboardSummary>(`${API_BASE}/dashboard/summary`, { headers }),
-        axios.get<DailySalesPoint[]>(`${API_BASE}/dashboard/sales/daily`, { headers, params: { days: 30 } }),
-      ])
+      const summaryResponse = await axios.get<DashboardSummary>(`${API_BASE}/dashboard/summary`, { headers })
       setDashboardSummary(summaryResponse.data)
-      setDailySales(dailySalesResponse.data)
     } catch (e) {
       console.error(e)
       if (axios.isAxiosError(e) && e.response?.status === 401) {
@@ -257,32 +265,6 @@ function App() {
       }
     } finally {
       setDashboardLoading(false)
-    }
-  }
-
-  const fetchSalesPage = async (token: string, page: number) => {
-    setSalesLoading(true)
-    try {
-      const response = await axios.get<SalesHistoryRow[]>(`${API_BASE}/dashboard/sales`, {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { limit: tablePageSize + 1, offset: page * tablePageSize },
-      })
-      setSalesHistory(response.data.slice(0, tablePageSize))
-      setHasMoreSales(response.data.length > tablePageSize)
-    } catch (e) {
-      console.error(e)
-      if (axios.isAxiosError(e) && e.response?.status === 401) {
-        localStorage.removeItem('medinexus_access_token')
-        setAccessToken(null)
-        setUser(null)
-        setLoginError('Your session expired. Please sign in again.')
-      } else {
-        setDashboardError(axios.isAxiosError(e) && e.response?.data?.detail
-          ? e.response.data.detail
-          : 'Could not load more sales history.')
-      }
-    } finally {
-      setSalesLoading(false)
     }
   }
 
@@ -309,6 +291,107 @@ function App() {
       }
     } finally {
       setInventoryLoading(false)
+    }
+  }
+
+  const openAddInventoryBatch = () => {
+    setEditingBatchId(null)
+    setInventoryForm({ ...emptyInventoryBatchForm(), medicine_id: medicines[0]?.medicine_id ?? '' })
+    setInventoryMessage('')
+    setInventoryModalOpen(true)
+  }
+
+  const openEditInventoryBatch = (batch: Batch) => {
+    setEditingBatchId(batch.batch_id)
+    setInventoryForm({
+      medicine_id: batch.medicine_id,
+      batch_number: batch.batch_number,
+      quantity: String(batch.quantity),
+      purchase_date: batch.purchase_date,
+      expiry_date: batch.expiry_date,
+      unit_cost: String(batch.unit_cost),
+      selling_price: String(batch.selling_price),
+      reorder_level: String(batch.reorder_level),
+      supplier: batch.supplier,
+    })
+    setInventoryMessage('')
+    setInventoryModalOpen(true)
+  }
+
+  const handleInventorySubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!accessToken) return
+    setInventorySaving(true)
+    setInventoryMessage('')
+    const payload = {
+      ...inventoryForm,
+      quantity: Number(inventoryForm.quantity),
+      unit_cost: Number(inventoryForm.unit_cost),
+      selling_price: Number(inventoryForm.selling_price),
+      reorder_level: Number(inventoryForm.reorder_level),
+    }
+    try {
+      if (editingBatchId) {
+        await axios.put(`${API_BASE}/dashboard/inventory/${encodeURIComponent(editingBatchId)}`, payload, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        })
+        setInventoryMessage('Inventory batch updated.')
+      } else {
+        await axios.post(`${API_BASE}/dashboard/inventory`, payload, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        })
+        setInventoryMessage('Supply added to inventory.')
+      }
+      setInventoryModalOpen(false)
+      setDashboardError('')
+      await Promise.all([
+        fetchDashboard(accessToken),
+        fetchInventoryPage(accessToken, inventoryPage),
+      ])
+    } catch (e) {
+      console.error(e)
+      if (axios.isAxiosError(e) && e.response?.status === 401) {
+        localStorage.removeItem('medinexus_access_token')
+        setAccessToken(null)
+        setUser(null)
+        setInventoryModalOpen(false)
+        setLoginError('Your session expired. Please sign in again.')
+        return
+      }
+      setInventoryMessage(axios.isAxiosError(e) && typeof e.response?.data?.detail === 'string'
+        ? e.response.data.detail
+        : 'Could not save this inventory batch.')
+    } finally {
+      setInventorySaving(false)
+    }
+  }
+
+  const handleDeleteInventoryBatch = async (batch: Batch) => {
+    if (!accessToken || !window.confirm(`Delete batch ${batch.batch_number} of ${batch.medicine_name}?`)) return
+    setDashboardError('')
+    try {
+      await axios.delete(`${API_BASE}/dashboard/inventory/${encodeURIComponent(batch.batch_id)}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      })
+      setInventoryMessage(`Batch ${batch.batch_number} deleted.`)
+      const nextPage = inventory.length === 1 && inventoryPage > 0 ? inventoryPage - 1 : inventoryPage
+      setInventoryPage(nextPage)
+      await Promise.all([
+        fetchDashboard(accessToken),
+        fetchInventoryPage(accessToken, nextPage),
+      ])
+    } catch (e) {
+      console.error(e)
+      if (axios.isAxiosError(e) && e.response?.status === 401) {
+        localStorage.removeItem('medinexus_access_token')
+        setAccessToken(null)
+        setUser(null)
+        setLoginError('Your session expired. Please sign in again.')
+        return
+      }
+      setDashboardError(axios.isAxiosError(e) && typeof e.response?.data?.detail === 'string'
+        ? e.response.data.detail
+        : 'Could not delete this inventory batch.')
     }
   }
 
@@ -343,9 +426,6 @@ function App() {
     if (risk === 'MEDIUM') return 'text-yellow-600 bg-yellow-50'
     return 'text-green-600 bg-green-50'
   }
-
-  const formatCurrency = (amount: number) =>
-    new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(amount)
 
   if (authChecking) {
     return <div className='min-h-screen flex items-center justify-center text-gray-600'>Checking your session...</div>
@@ -496,34 +576,33 @@ function App() {
             {dashboardError}
           </div>
         )}
+        {inventoryMessage && !inventoryModalOpen && (
+          <div role='status' className='mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800'>
+            {inventoryMessage}
+          </div>
+        )}
 
         {dashboardSection === 'dashboard' && (
           <>
             <section className='mb-6'>
               <div className='mb-4 flex flex-wrap items-end justify-between gap-2'>
                 <div>
-                  <h1 className='text-2xl font-bold text-slate-900'>Shop dashboard</h1>
+                  <h1 className='text-2xl font-bold text-slate-900'>Inventory dashboard</h1>
                   <p className='mt-1 text-sm text-slate-500'>
                     {user.shop_name} · {user.shop_id}
                   </p>
                 </div>
-                {dashboardSummary && (
-                  <p className='text-xs text-slate-500'>
-                    Sales overview: {dashboardSummary.period_start} to {dashboardSummary.period_end}
-                  </p>
-                )}
               </div>
               {dashboardLoading && !dashboardSummary ? (
                 <div className='rounded-xl bg-white p-6 text-sm text-slate-500 shadow-sm'>Loading shop data...</div>
               ) : dashboardSummary ? (
-                <>
                   <div className='grid grid-cols-2 gap-4 lg:grid-cols-5'>
                     {[
                       { label: 'Available units', value: dashboardSummary.available_units.toLocaleString('en-IN'), detail: 'Unexpired inventory', tone: 'text-blue-700' },
-                      { label: 'Sales revenue', value: formatCurrency(dashboardSummary.sales_revenue), detail: `${dashboardSummary.sales_units.toLocaleString('en-IN')} units sold`, tone: 'text-emerald-700' },
-                      { label: 'Medicines', value: dashboardSummary.medicine_count.toLocaleString('en-IN'), detail: 'In shop catalog', tone: 'text-slate-900' },
+                      { label: 'Inventory batches', value: dashboardSummary.batch_count.toLocaleString('en-IN'), detail: 'Across all pages', tone: 'text-slate-900' },
+                      { label: 'Medicines', value: dashboardSummary.medicine_count.toLocaleString('en-IN'), detail: 'In shop catalog', tone: 'text-violet-700' },
                       { label: 'Low stock', value: dashboardSummary.low_stock_medicines.toLocaleString('en-IN'), detail: 'Medicines at reorder level', tone: 'text-amber-700' },
-                      { label: 'Expiring soon', value: dashboardSummary.expiring_batches.toLocaleString('en-IN'), detail: 'Batches within 30 days', tone: 'text-rose-700' },
+                      { label: 'Expiring batches', value: dashboardSummary.expiring_batches.toLocaleString('en-IN'), detail: 'Within 30 days', tone: 'text-rose-700' },
                     ].map(card => (
                       <div key={card.label} className='rounded-xl border border-slate-100 bg-white p-4 shadow-sm'>
                         <p className='text-sm font-medium text-slate-500'>{card.label}</p>
@@ -532,36 +611,6 @@ function App() {
                       </div>
                     ))}
                   </div>
-                  <div className='mt-6 rounded-xl border border-slate-100 bg-white p-5 shadow-sm'>
-                    <div className='mb-4 flex flex-wrap items-start justify-between gap-2'>
-                      <div>
-                        <h2 className='text-lg font-semibold text-slate-900'>Daily sales revenue</h2>
-                        <p className='text-sm text-slate-500'>30 days through the latest recorded sale · units sold × recorded unit price</p>
-                      </div>
-                      <button
-                        type='button'
-                        onClick={() => setDashboardSection('forecasting')}
-                        className='text-sm font-medium text-blue-700 hover:text-blue-900'
-                      >
-                        Open forecasting
-                      </button>
-                    </div>
-                    {dailySales.length > 0 ? (
-                      <ResponsiveContainer width='100%' height={280}>
-                        <LineChart data={dailySales}>
-                          <CartesianGrid strokeDasharray='3 3' />
-                          <XAxis dataKey='sale_date' tick={{ fontSize: 11 }} tickFormatter={value => String(value).slice(5)} />
-                          <YAxis tick={{ fontSize: 11 }} tickFormatter={value => `₹${Number(value) >= 1000 ? `${(Number(value) / 1000).toFixed(0)}k` : value}`} />
-                          <Tooltip formatter={value => [formatCurrency(Number(value)), 'Sales revenue']} />
-                          <Line type='monotone' dataKey='sales_revenue' stroke='#0f766e' strokeWidth={2} dot={false} />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    ) : (
-                      <p className='py-12 text-center text-sm text-slate-500'>No sales recorded in the last 30 days.</p>
-                    )}
-                    <p className='mt-2 text-xs text-slate-400'>{dashboardSummary.sales_revenue_basis}</p>
-                  </div>
-                </>
               ) : (
                 <div className='rounded-xl bg-white p-6 text-sm text-slate-500 shadow-sm'>
                   Shop dashboard data is not available. Confirm the local SQLite database for this shop has been imported.
@@ -570,75 +619,26 @@ function App() {
               )}
             </section>
 
-            <section className='grid grid-cols-1 gap-5 xl:grid-cols-2'>
+            <section className='grid grid-cols-1 gap-5'>
               <div className='overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm'>
-                <div className='flex items-center justify-between border-b border-slate-100 px-4 py-3'>
-                  <div className='flex items-center gap-2'>
-                    <ReceiptText className='h-4 w-4 text-emerald-700' />
-                    <h2 className='font-semibold text-slate-900'>Recent sales</h2>
-                  </div>
-                  <span className='text-xs text-slate-500'>Page {salesPage + 1}</span>
-                </div>
-                <div className='h-[330px] overflow-auto'>
-                  <table className='min-w-full divide-y divide-slate-100 text-xs'>
-                    <thead className='sticky top-0 bg-slate-50 text-left uppercase tracking-wide text-slate-500'>
-                      <tr>
-                        <th className='px-3 py-2.5 font-medium'>Date</th>
-                        <th className='px-3 py-2.5 font-medium'>Medicine</th>
-                        <th className='px-3 py-2.5 text-right font-medium'>Units</th>
-                        <th className='px-3 py-2.5 text-right font-medium'>Revenue*</th>
-                      </tr>
-                    </thead>
-                    <tbody className='divide-y divide-slate-50'>
-                      {salesHistory.map((sale, index) => (
-                        <tr key={`${sale.sale_date}-${sale.medicine_id}-${index}`} className='hover:bg-slate-50'>
-                          <td className='whitespace-nowrap px-3 py-2.5 text-slate-500'>{sale.sale_date}</td>
-                          <td className='max-w-36 truncate px-3 py-2.5 font-medium text-slate-800' title={sale.medicine_name}>{sale.medicine_name}</td>
-                          <td className='px-3 py-2.5 text-right text-slate-600'>{sale.units_sold.toLocaleString('en-IN')}</td>
-                          <td className='whitespace-nowrap px-3 py-2.5 text-right font-medium text-slate-800'>{formatCurrency(sale.sales_revenue)}</td>
-                        </tr>
-                      ))}
-                      {salesLoading && salesHistory.length === 0 && (
-                        <tr><td colSpan={4} className='px-3 py-10 text-center text-slate-400'>Loading sales...</td></tr>
-                      )}
-                      {!salesLoading && salesHistory.length === 0 && (
-                        <tr><td colSpan={4} className='px-3 py-10 text-center text-slate-400'>No sales history available.</td></tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-                <div className='flex h-12 items-center justify-between border-t border-slate-100 px-3'>
-                  <span className='text-xs text-slate-400'>*Estimated from units × unit price</span>
-                  <div className='flex items-center gap-1'>
-                    <button
-                      type='button'
-                      onClick={() => setSalesPage(page => Math.max(0, page - 1))}
-                      disabled={salesPage === 0 || salesLoading}
-                      aria-label='Previous sales page'
-                      className='rounded-md p-1.5 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35'
-                    >
-                      <ChevronLeft className='h-4 w-4' />
-                    </button>
-                    <button
-                      type='button'
-                      onClick={() => setSalesPage(page => page + 1)}
-                      disabled={!hasMoreSales || salesLoading}
-                      aria-label='Next sales page'
-                      className='rounded-md p-1.5 text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35'
-                    >
-                      <ChevronRight className='h-4 w-4' />
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div className='overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm'>
-                <div className='flex items-center justify-between border-b border-slate-100 px-4 py-3'>
+                <div className='flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3'>
                   <div className='flex items-center gap-2'>
                     <Boxes className='h-4 w-4 text-blue-700' />
                     <h2 className='font-semibold text-slate-900'>Inventory batches</h2>
                   </div>
-                  <span className='text-xs text-slate-500'>Page {inventoryPage + 1}</span>
+                  <div className='flex items-center gap-3'>
+                    <span className='text-xs text-slate-500'>Page {inventoryPage + 1}</span>
+                    <button
+                      type='button'
+                      onClick={openAddInventoryBatch}
+                      disabled={medicinesLoading || medicines.length === 0}
+                      title={medicines.length === 0 ? 'No medicines are available in this shop catalog' : 'Add a supply batch'}
+                      className='inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50'
+                    >
+                      <Plus className='h-4 w-4' />
+                      Add supply
+                    </button>
+                  </div>
                 </div>
                 <div className='h-[330px] overflow-auto'>
                   <table className='min-w-full divide-y divide-slate-100 text-xs'>
@@ -648,6 +648,7 @@ function App() {
                         <th className='px-3 py-2.5 text-right font-medium'>Qty</th>
                         <th className='px-3 py-2.5 font-medium'>Expiry</th>
                         <th className='px-3 py-2.5 font-medium'>Status</th>
+                        <th className='px-3 py-2.5 text-right font-medium'>Actions</th>
                       </tr>
                     </thead>
                     <tbody className='divide-y divide-slate-50'>
@@ -666,13 +667,33 @@ function App() {
                                   : 'bg-rose-50 text-rose-700'
                             }`}>{batch.stock_status}</span>
                           </td>
+                          <td className='whitespace-nowrap px-3 py-2.5 text-right'>
+                            <button
+                              type='button'
+                              onClick={() => openEditInventoryBatch(batch)}
+                              aria-label={`Edit ${batch.batch_number}`}
+                              title='Edit batch'
+                              className='rounded-md p-1.5 text-slate-600 hover:bg-blue-50 hover:text-blue-700'
+                            >
+                              <Pencil className='h-4 w-4' />
+                            </button>
+                            <button
+                              type='button'
+                              onClick={() => handleDeleteInventoryBatch(batch)}
+                              aria-label={`Delete ${batch.batch_number}`}
+                              title='Delete batch'
+                              className='rounded-md p-1.5 text-slate-600 hover:bg-rose-50 hover:text-rose-700'
+                            >
+                              <Trash2 className='h-4 w-4' />
+                            </button>
+                          </td>
                         </tr>
                       ))}
                       {inventoryLoading && inventory.length === 0 && (
-                        <tr><td colSpan={4} className='px-3 py-10 text-center text-slate-400'>Loading inventory...</td></tr>
+                        <tr><td colSpan={5} className='px-3 py-10 text-center text-slate-400'>Loading inventory...</td></tr>
                       )}
                       {!inventoryLoading && inventory.length === 0 && (
-                        <tr><td colSpan={4} className='px-3 py-10 text-center text-slate-400'>No inventory batches available.</td></tr>
+                        <tr><td colSpan={5} className='px-3 py-10 text-center text-slate-400'>No inventory batches available. Add a supply to get started.</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -703,6 +724,163 @@ function App() {
               </div>
             </section>
           </>
+        )}
+
+        {inventoryModalOpen && (
+          <div className='fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/40 p-4'>
+            <section
+              role='dialog'
+              aria-modal='true'
+              aria-labelledby='inventory-form-title'
+              className='my-auto w-full max-w-2xl rounded-2xl bg-white p-5 shadow-2xl sm:p-6'
+            >
+              <div className='mb-5 flex items-start justify-between gap-4'>
+                <div>
+                  <h2 id='inventory-form-title' className='text-xl font-semibold text-slate-900'>
+                    {editingBatchId ? 'Update inventory batch' : 'Add supply'}
+                  </h2>
+                  <p className='mt-1 text-sm text-slate-500'>Enter the batch details for {user.shop_name}.</p>
+                </div>
+                <button
+                  type='button'
+                  onClick={() => setInventoryModalOpen(false)}
+                  aria-label='Close inventory form'
+                  className='rounded-lg p-2 text-slate-500 hover:bg-slate-100'
+                >
+                  <X className='h-5 w-5' />
+                </button>
+              </div>
+              <form onSubmit={handleInventorySubmit} className='space-y-4'>
+                <div className='grid grid-cols-1 gap-4 sm:grid-cols-2'>
+                  <label className='text-sm font-medium text-slate-700 sm:col-span-2'>
+                    Medicine
+                    <select
+                      required
+                      value={inventoryForm.medicine_id}
+                      onChange={event => setInventoryForm(form => ({ ...form, medicine_id: event.target.value }))}
+                      className='mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 font-normal'
+                    >
+                      <option value='' disabled>Select medicine</option>
+                      {medicines.map(medicine => (
+                        <option key={medicine.medicine_id} value={medicine.medicine_id}>
+                          {medicine.medicine_name} ({medicine.medicine_id})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className='text-sm font-medium text-slate-700'>
+                    Batch number
+                    <input
+                      required
+                      maxLength={64}
+                      value={inventoryForm.batch_number}
+                      onChange={event => setInventoryForm(form => ({ ...form, batch_number: event.target.value }))}
+                      className='mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal'
+                    />
+                  </label>
+                  <label className='text-sm font-medium text-slate-700'>
+                    Supplier
+                    <input
+                      required
+                      maxLength={255}
+                      value={inventoryForm.supplier}
+                      onChange={event => setInventoryForm(form => ({ ...form, supplier: event.target.value }))}
+                      className='mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal'
+                    />
+                  </label>
+                  <label className='text-sm font-medium text-slate-700'>
+                    Quantity
+                    <input
+                      required
+                      type='number'
+                      min='0'
+                      step='1'
+                      value={inventoryForm.quantity}
+                      onChange={event => setInventoryForm(form => ({ ...form, quantity: event.target.value }))}
+                      className='mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal'
+                    />
+                  </label>
+                  <label className='text-sm font-medium text-slate-700'>
+                    Reorder level
+                    <input
+                      required
+                      type='number'
+                      min='0'
+                      step='1'
+                      value={inventoryForm.reorder_level}
+                      onChange={event => setInventoryForm(form => ({ ...form, reorder_level: event.target.value }))}
+                      className='mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal'
+                    />
+                  </label>
+                  <label className='text-sm font-medium text-slate-700'>
+                    Purchase date
+                    <input
+                      required
+                      type='date'
+                      max={inventoryForm.expiry_date || undefined}
+                      value={inventoryForm.purchase_date}
+                      onChange={event => setInventoryForm(form => ({ ...form, purchase_date: event.target.value }))}
+                      className='mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal'
+                    />
+                  </label>
+                  <label className='text-sm font-medium text-slate-700'>
+                    Expiry date
+                    <input
+                      required
+                      type='date'
+                      min={inventoryForm.purchase_date}
+                      value={inventoryForm.expiry_date}
+                      onChange={event => setInventoryForm(form => ({ ...form, expiry_date: event.target.value }))}
+                      className='mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal'
+                    />
+                  </label>
+                  <label className='text-sm font-medium text-slate-700'>
+                    Unit cost
+                    <input
+                      required
+                      type='number'
+                      min='0'
+                      step='0.01'
+                      value={inventoryForm.unit_cost}
+                      onChange={event => setInventoryForm(form => ({ ...form, unit_cost: event.target.value }))}
+                      className='mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal'
+                    />
+                  </label>
+                  <label className='text-sm font-medium text-slate-700'>
+                    Selling price
+                    <input
+                      required
+                      type='number'
+                      min='0'
+                      step='0.01'
+                      value={inventoryForm.selling_price}
+                      onChange={event => setInventoryForm(form => ({ ...form, selling_price: event.target.value }))}
+                      className='mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2.5 font-normal'
+                    />
+                  </label>
+                </div>
+                {inventoryMessage && (
+                  <p role='alert' className='rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700'>{inventoryMessage}</p>
+                )}
+                <div className='flex justify-end gap-3 border-t border-slate-100 pt-4'>
+                  <button
+                    type='button'
+                    onClick={() => setInventoryModalOpen(false)}
+                    className='rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50'
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type='submit'
+                    disabled={inventorySaving || medicines.length === 0}
+                    className='inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60'
+                  >
+                    {inventorySaving ? 'Saving...' : editingBatchId ? 'Save changes' : 'Add supply'}
+                  </button>
+                </div>
+              </form>
+            </section>
+          </div>
         )}
 
         {dashboardSection === 'forecasting' && (

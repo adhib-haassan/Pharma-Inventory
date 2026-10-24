@@ -4,11 +4,12 @@ import secrets
 import sqlite3
 import time
 import re
+import uuid
 from datetime import date, timedelta
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pathlib import Path
 import sys
 import json
@@ -37,6 +38,19 @@ SHOP_ID_PATTERN = re.compile(r'SHOP_0[1-5]\Z')
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+
+class InventoryBatchInput(BaseModel):
+    medicine_id: str = Field(min_length=1, max_length=32)
+    batch_number: str = Field(min_length=1, max_length=64)
+    quantity: int = Field(ge=0)
+    purchase_date: date
+    expiry_date: date
+    unit_cost: float = Field(ge=0)
+    selling_price: float = Field(ge=0)
+    reorder_level: int = Field(ge=0)
+    supplier: str = Field(min_length=1, max_length=255)
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -188,6 +202,68 @@ def query_shop_database(shop_id: str, query: str, params: tuple = ()):
             connection.close()
 
 
+def mutate_shop_database(shop_id: str, query: str, params: tuple = ()):
+    if not SHOP_ID_PATTERN.fullmatch(shop_id):
+        raise HTTPException(status_code=403, detail='No shop database is assigned to this account')
+
+    database_path = SHOP_DATABASE_DIRECTORY / f'medinexus_{shop_id.lower()}.sqlite3'
+    if not database_path.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail=f'The local {shop_id} database has not been created. Import the shop CSV data first.',
+        )
+
+    connection = None
+    try:
+        connection = sqlite3.connect(database_path, timeout=5)
+        connection.execute('PRAGMA foreign_keys = ON')
+        cursor = connection.execute(query, params)
+        connection.commit()
+        return cursor.rowcount
+    except sqlite3.IntegrityError as error:
+        if connection:
+            connection.rollback()
+        raise HTTPException(status_code=422, detail='The inventory batch references invalid data.') from error
+    except sqlite3.Error as error:
+        if connection:
+            connection.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail=f'Could not update the local {shop_id} database.',
+        ) from error
+    finally:
+        if connection:
+            connection.close()
+
+
+def inventory_batch_values(shop_id: str, batch: InventoryBatchInput) -> tuple:
+    values = batch.dict()
+    for field in ('medicine_id', 'batch_number', 'supplier'):
+        values[field] = values[field].strip()
+        if not values[field]:
+            raise HTTPException(status_code=422, detail=f'{field} must not be empty')
+    if values['purchase_date'] > values['expiry_date']:
+        raise HTTPException(status_code=422, detail='purchase_date must be on or before expiry_date')
+    medicine = query_shop_database(
+        shop_id,
+        'SELECT medicine_id FROM medicines WHERE medicine_id = ?',
+        (values['medicine_id'],),
+    )
+    if not medicine:
+        raise HTTPException(status_code=422, detail='Select a medicine in this shop catalog')
+    return (
+        values['medicine_id'],
+        values['batch_number'],
+        values['quantity'],
+        values['purchase_date'].isoformat(),
+        values['expiry_date'].isoformat(),
+        values['unit_cost'],
+        values['selling_price'],
+        values['reorder_level'],
+        values['supplier'],
+    )
+
+
 def get_latest_sale_date(shop_id: str) -> date:
     rows = query_shop_database(
         shop_id,
@@ -201,16 +277,14 @@ def get_latest_sale_date(shop_id: str) -> date:
 
 @app.get('/dashboard/summary')
 def get_dashboard_summary(
-    days: int = Query(30, ge=1, le=365),
     current_user: dict = Depends(get_current_user),
 ):
-    latest_sale_date = get_latest_sale_date(current_user['shop_id'])
-    start_date = latest_sale_date - timedelta(days=days - 1)
     rows = query_shop_database(
         current_user['shop_id'],
         """
         SELECT
             (SELECT COUNT(*) FROM medicines) AS medicine_count,
+            (SELECT COUNT(*) FROM inventory_batches) AS batch_count,
             (SELECT COALESCE(SUM(quantity), 0)
              FROM inventory_batches
              WHERE expiry_date >= date('now')) AS available_units,
@@ -226,28 +300,12 @@ def get_dashboard_summary(
              FROM inventory_batches
              WHERE quantity > 0
                AND expiry_date BETWEEN date('now')
-                                   AND date('now', '+30 days')) AS expiring_batches,
-            (SELECT COALESCE(SUM(quantity), 0)
-             FROM sales_history
-             WHERE sale_date BETWEEN ? AND ?) AS sales_units,
-            (SELECT COALESCE(SUM(quantity * unit_price), 0)
-             FROM sales_history
-             WHERE sale_date BETWEEN ? AND ?) AS sales_revenue
+                                   AND date('now', '+30 days')) AS expiring_batches
         """,
-        (
-            start_date.isoformat(),
-            latest_sale_date.isoformat(),
-            start_date.isoformat(),
-            latest_sale_date.isoformat(),
-        ),
     )
     summary = rows[0]
     summary['shop_id'] = current_user['shop_id']
     summary['shop_name'] = current_user['shop_name']
-    summary['period_start'] = start_date
-    summary['period_end'] = latest_sale_date
-    summary['currency'] = 'INR'
-    summary['sales_revenue_basis'] = 'sales quantity multiplied by recorded unit price; discounts and returns are not in the source data'
     return summary
 
 
@@ -364,6 +422,63 @@ def get_inventory(
     )
 
 
+@app.post('/dashboard/inventory', status_code=201)
+def create_inventory_batch(
+    batch: InventoryBatchInput,
+    current_user: dict = Depends(get_current_user),
+):
+    values = inventory_batch_values(current_user['shop_id'], batch)
+    batch_id = uuid.uuid4().hex
+    mutate_shop_database(
+        current_user['shop_id'],
+        """
+        INSERT INTO inventory_batches
+            (batch_id, medicine_id, batch_number, quantity, purchase_date, expiry_date,
+             unit_cost, selling_price, reorder_level, supplier)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (batch_id, *values),
+    )
+    return {'batch_id': batch_id}
+
+
+@app.put('/dashboard/inventory/{batch_id}')
+def update_inventory_batch(
+    batch_id: str,
+    batch: InventoryBatchInput,
+    current_user: dict = Depends(get_current_user),
+):
+    values = inventory_batch_values(current_user['shop_id'], batch)
+    affected = mutate_shop_database(
+        current_user['shop_id'],
+        """
+        UPDATE inventory_batches
+        SET medicine_id = ?, batch_number = ?, quantity = ?, purchase_date = ?,
+            expiry_date = ?, unit_cost = ?, selling_price = ?, reorder_level = ?, supplier = ?
+        WHERE batch_id = ?
+        """,
+        (*values, batch_id),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=404, detail='Inventory batch not found')
+    return {'batch_id': batch_id}
+
+
+@app.delete('/dashboard/inventory/{batch_id}')
+def delete_inventory_batch(
+    batch_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    affected = mutate_shop_database(
+        current_user['shop_id'],
+        'DELETE FROM inventory_batches WHERE batch_id = ?',
+        (batch_id,),
+    )
+    if affected == 0:
+        raise HTTPException(status_code=404, detail='Inventory batch not found')
+    return {'batch_id': batch_id}
+
+
 @app.get('/medicines')
 def get_medicines(
     limit: int = Query(100, ge=1, le=500),
@@ -388,7 +503,23 @@ def get_forecast(
     try:
         medicines = state['medicines']
         sales = state['sales']
-        inventory = state['inventory']
+        inventory_rows = query_shop_database(
+            current_user['shop_id'],
+            """
+            SELECT batch_id, medicine_id, quantity AS current_stock, expiry_date
+            FROM inventory_batches
+            """,
+        )
+        import pandas as pd
+        inventory = pd.DataFrame(
+            inventory_rows,
+            columns=['batch_id', 'medicine_id', 'current_stock', 'expiry_date'],
+        )
+        if not inventory.empty:
+            inventory['shop_id'] = current_user['shop_id']
+            inventory['expiry_date'] = pd.to_datetime(inventory['expiry_date'])
+        else:
+            inventory['shop_id'] = current_user['shop_id']
         local_models = state['local_models']
         central = state['central']
         
