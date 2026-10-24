@@ -135,6 +135,13 @@ function App() {
     setError('')
   }
 
+  const goHome = () => {
+    setMedicineQuery('')
+    setResult(null)
+    setError('')
+    window.scrollTo(0, 0)
+  }
+
   const fetchMedicines = async (token: string) => {
     setMedicinesLoading(true)
     setMedicinesError('')
@@ -272,21 +279,30 @@ function App() {
   return (
     <div className='min-h-screen bg-gray-50'>
       <header className='bg-white shadow-sm border-b'>
-        <div className='max-w-7xl mx-auto px-4 py-5 flex flex-wrap items-center justify-between gap-4'>
+        <div className='flex h-20 w-full flex-nowrap items-center justify-between gap-4 px-4'>
           <div>
-            <img src='/medinexus-logo.png' alt='MediNexus' className='h-16 w-52 object-contain object-left' />
+            <button
+              type='button'
+              onClick={goHome}
+              aria-label='Go to home'
+              title='Home'
+              className='flex h-20 shrink-0 items-center overflow-visible'
+            >
+              <img src='/medinexus-logo.png' alt='MediNexus' className='h-16 w-40 object-contain object-left md:h-20 md:w-60' />
+            </button>
           </div>
-          <div className='flex items-center gap-4'>
-            <div className='text-right'>
-              <p className='font-medium text-gray-900'>{user.shop_name}</p>
-              <p className='text-sm text-gray-600'>{user.email}</p>
+          <div className='flex shrink-0 items-center gap-3'>
+            <div className='hidden text-right sm:block'>
+              <p className='text-sm font-medium text-gray-900'>{user.shop_name}</p>
+              <p className='text-xs text-gray-600'>{user.email}</p>
             </div>
             <button
               onClick={handleLogout}
-              className='inline-flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50'
+              aria-label='Sign out'
+              title='Sign out'
+              className='inline-flex items-center justify-center rounded-md border border-gray-300 p-2 text-gray-700 hover:bg-gray-50'
             >
               <LogOut className='w-4 h-4' />
-              Sign out
             </button>
           </div>
         </div>
