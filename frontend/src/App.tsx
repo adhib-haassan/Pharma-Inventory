@@ -1,7 +1,7 @@
 import { useState, useEffect, type FormEvent, type ReactNode } from 'react'
 import axios from 'axios'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Activity, Package, AlertTriangle, ShoppingCart, Calendar, LogOut, Pill, ShieldCheck, LayoutDashboard, ChartNoAxesCombined, ChevronLeft, ChevronRight, Boxes, Plus, Pencil, Trash2, X, MessageCircle, Send, Download, Mail } from 'lucide-react'
+import { Activity, Package, AlertTriangle, ShoppingCart, Calendar, LogOut, Pill, ShieldCheck, LayoutDashboard, ChartNoAxesCombined, ChevronLeft, ChevronRight, Boxes, Plus, Pencil, Trash2, X, MessageCircle, Send, Download, Mail, Bell } from 'lucide-react'
 
 const API_BASE = 'http://localhost:8000'
 
@@ -154,6 +154,14 @@ interface Batch {
   medicine_available_quantity: number
 }
 
+interface InventoryNotification {
+  key: string
+  signature: string
+  kind: 'low_stock' | 'expiring'
+  title: string
+  detail: string
+}
+
 interface InventoryBatchForm {
   medicine_id: string
   batch_number: string
@@ -229,6 +237,10 @@ function App() {
   const [error, setError] = useState('')
   const [dashboardSummary, setDashboardSummary] = useState<DashboardSummary | null>(null)
   const [inventory, setInventory] = useState<Batch[]>([])
+  const [notificationInventory, setNotificationInventory] = useState<Batch[]>([])
+  const [seenNotifications, setSeenNotifications] = useState<Record<string, string>>({})
+  const [notificationOwner, setNotificationOwner] = useState<string | null>(null)
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [dashboardLoading, setDashboardLoading] = useState(false)
   const [dashboardError, setDashboardError] = useState('')
   const [inventoryLoading, setInventoryLoading] = useState(false)
@@ -254,6 +266,42 @@ function App() {
   const tablePageSize = 8
   const chatMessages = chatThreads.find(thread => thread.id === activeChatId)?.messages ?? []
   const chatStorageKey = user ? `medinexus_ai_chats:${user.email.toLowerCase()}` : null
+  const notificationStorageKey = user ? `medinexus_inventory_notifications:${user.email.toLowerCase()}` : null
+  const localToday = new Date()
+  const todayIso = new Date(localToday.getTime() - localToday.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
+  const cutoffDate = new Date(localToday)
+  cutoffDate.setDate(cutoffDate.getDate() + 30)
+  const cutoffIso = new Date(cutoffDate.getTime() - cutoffDate.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
+  const lowStockByMedicine = new Map<string, Batch>()
+  for (const batch of notificationInventory) {
+    if (batch.stock_status === 'LOW STOCK') {
+      const existing = lowStockByMedicine.get(batch.medicine_id)
+      lowStockByMedicine.set(batch.medicine_id, existing
+        ? { ...existing, reorder_level: Math.max(existing.reorder_level, batch.reorder_level) }
+        : batch)
+    }
+  }
+  const currentNotifications: InventoryNotification[] = [
+    ...[...lowStockByMedicine.values()].map(batch => ({
+      key: `low-stock:${batch.medicine_id}`,
+      signature: `${batch.medicine_available_quantity}:${batch.reorder_level}`,
+      kind: 'low_stock' as const,
+      title: `${batch.medicine_name} is low on stock`,
+      detail: `${batch.medicine_available_quantity.toLocaleString('en-IN')} available · reorder level ${batch.reorder_level.toLocaleString('en-IN')}`,
+    })),
+    ...notificationInventory
+      .filter(batch => batch.quantity > 0 && batch.expiry_date >= todayIso && batch.expiry_date <= cutoffIso)
+      .map(batch => ({
+        key: `expiring:${batch.batch_id}`,
+        signature: `${batch.expiry_date}:${batch.quantity}`,
+        kind: 'expiring' as const,
+        title: `${batch.medicine_name} expires soon`,
+        detail: `Batch ${batch.batch_number} · ${batch.quantity.toLocaleString('en-IN')} units · ${batch.expiry_date}`,
+      })),
+  ]
+  const unseenNotifications = currentNotifications.filter(notification => (
+    seenNotifications[notification.key] !== notification.signature
+  ))
 
   useEffect(() => {
     if (!accessToken) {
@@ -289,6 +337,23 @@ function App() {
   useEffect(() => {
     if (user && accessToken) fetchInventoryPage(accessToken, inventoryPage)
   }, [user, accessToken, inventoryPage])
+
+  useEffect(() => {
+    setNotificationOwner(null)
+    setSeenNotifications({})
+    setNotificationInventory([])
+    setNotificationsOpen(false)
+    if (!user || !notificationStorageKey) return
+
+    try {
+      const saved = localStorage.getItem(notificationStorageKey)
+      const parsed = saved ? JSON.parse(saved) as Record<string, string> : {}
+      setSeenNotifications(parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {})
+    } catch {
+      localStorage.removeItem(notificationStorageKey)
+    }
+    setNotificationOwner(user.email.toLowerCase())
+  }, [user?.email])
 
   useEffect(() => {
     setChatOwner(null)
@@ -409,8 +474,12 @@ function App() {
     setDashboardError('')
     try {
       const headers = { Authorization: `Bearer ${token}` }
-      const summaryResponse = await axios.get<DashboardSummary>(`${API_BASE}/dashboard/summary`, { headers })
+      const [summaryResponse, inventoryResponse] = await Promise.all([
+        axios.get<DashboardSummary>(`${API_BASE}/dashboard/summary`, { headers }),
+        axios.get<Batch[]>(`${API_BASE}/dashboard/inventory`, { headers, params: { limit: 500, offset: 0 } }),
+      ])
       setDashboardSummary(summaryResponse.data)
+      setNotificationInventory(inventoryResponse.data)
     } catch (e) {
       console.error(e)
       if (axios.isAxiosError(e) && e.response?.status === 401) {
@@ -425,6 +494,23 @@ function App() {
       }
     } finally {
       setDashboardLoading(false)
+    }
+  }
+
+  const toggleNotifications = () => {
+    const opening = !notificationsOpen
+    setNotificationsOpen(opening)
+    if (!opening || !notificationStorageKey || notificationOwner !== user?.email.toLowerCase()) return
+
+    const nextSeen = { ...seenNotifications }
+    for (const notification of currentNotifications) {
+      nextSeen[notification.key] = notification.signature
+    }
+    setSeenNotifications(nextSeen)
+    try {
+      localStorage.setItem(notificationStorageKey, JSON.stringify(nextSeen))
+    } catch {
+      // Keep the panel usable even if browser storage is unavailable.
     }
   }
 
@@ -905,6 +991,50 @@ function App() {
                   <p className='mt-1 text-sm text-slate-500'>
                     {user.shop_name} · {user.shop_id}
                   </p>
+                </div>
+                <div className='relative'>
+                  <button
+                    type='button'
+                    onClick={toggleNotifications}
+                    aria-label={`Inventory notifications${unseenNotifications.length ? `, ${unseenNotifications.length} new` : ''}`}
+                    aria-expanded={notificationsOpen}
+                    aria-haspopup='dialog'
+                    className={`relative inline-flex h-10 w-10 items-center justify-center rounded-xl border bg-white shadow-sm transition hover:bg-slate-50 ${notificationsOpen ? 'border-blue-300 text-blue-700' : 'border-slate-200 text-slate-600'}`}
+                  >
+                    <Bell className='h-5 w-5 translate-y-[-2px]' />
+                    {unseenNotifications.length > 0 && (
+                      <span className='absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-600 px-1 text-[10px] font-bold text-white'>
+                        {unseenNotifications.length > 9 ? '9+' : unseenNotifications.length}
+                      </span>
+                    )}
+                  </button>
+                  {notificationsOpen && (
+                    <section role='dialog' aria-label='Inventory notifications' className='absolute right-0 top-12 z-40 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl'>
+                      <div className='flex items-center justify-between border-b border-slate-100 px-4 py-3'>
+                        <h2 className='text-sm font-semibold text-slate-900'>Inventory alerts</h2>
+                        <button type='button' onClick={() => setNotificationsOpen(false)} aria-label='Close notifications' className='rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700'>
+                          <X className='h-4 w-4' />
+                        </button>
+                      </div>
+                      <div className='max-h-80 overflow-y-auto p-2'>
+                        {currentNotifications.length === 0 ? (
+                          <p className='px-3 py-6 text-center text-sm text-slate-500'>No active low-stock or near-expiry alerts.</p>
+                        ) : currentNotifications.map(notification => (
+                          <div key={notification.key} className='flex gap-3 rounded-lg px-3 py-2.5 hover:bg-slate-50'>
+                            <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${notification.kind === 'low_stock' ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700'}`}>
+                              {notification.kind === 'low_stock' ? <AlertTriangle className='h-4 w-4' /> : <Calendar className='h-4 w-4' />}
+                            </span>
+                            <div className='min-w-0 flex-1'>
+                              <p className='text-xs font-semibold text-slate-800'>{notification.title}</p>
+                              <p className='mt-0.5 text-[11px] leading-4 text-slate-500'>{notification.detail}</p>
+                            </div>
+                            {seenNotifications[notification.key] !== notification.signature && <span className='mt-1.5 h-2 w-2 shrink-0 rounded-full bg-blue-600' aria-label='New alert' />}
+                          </div>
+                        ))}
+                      </div>
+                      <p className='border-t border-slate-100 px-4 py-2 text-[10px] text-slate-400'>Alerts are saved as seen for this signed-in user on this device.</p>
+                    </section>
+                  )}
                 </div>
               </div>
               {dashboardLoading && !dashboardSummary ? (
