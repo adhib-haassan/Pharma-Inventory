@@ -2,6 +2,7 @@
 
 MediNexus is a research prototype for exploring daily medicine-demand forecasting and inventory planning across five simulated medical shops. It includes a Jupyter notebook for data analysis and model evaluation, and a command line application for selecting a shop and medicine and viewing a 30-day forecast.
 
+For step-by-step instructions to install and run the web application after cloning, see [INSTALLATION.md](INSTALLATION.md).
 
 ## Contents
 
@@ -24,7 +25,7 @@ MediNexus is a research prototype for exploring daily medicine-demand forecastin
 - Internet access for the first dependency installation.
 - Approximately 2 GB or more of free memory is recommended for notebook training. Pretrained model files are included, so running the CLI normally does not require retraining.
 
-Python packages are listed in `requirements.txt`. It contains the CLI packages and the extra notebook dependencies.
+Python packages are listed in `backend/requirements.txt`. It contains the application packages and the extra notebook dependencies.
 
 | Package | Used for |
 | --- | --- |
@@ -36,90 +37,13 @@ Python packages are listed in `requirements.txt`. It contains the CLI packages a
 | `scikit-learn` | Notebook evaluation metrics |
 | `jupyter` | Running the notebook locally |
 
-## Install on Windows
-
-Open PowerShell in the project root, the folder containing `MediNexus_Terminal_Forecast.py`.
-
-### 1. Check Python
-
-```powershell
-py --version
-```
-
-If `py` is not recognized, install 64-bit Python from [python.org](https://www.python.org/downloads/) and enable the Python Launcher during setup. Python 3.10 to 3.13 is recommended for the package versions used by this project.
-
-### 2. Create and activate a virtual environment
-
-```powershell
-py -3.13 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-If PowerShell blocks activation in the current window, use the environment's Python directly instead:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-```
-
-Alternatively, in Command Prompt:
-
-```bat
-py -3.13 -m venv .venv
-.venv\Scripts\activate.bat
-```
-
-### 3. Install dependencies
-
-With the environment activated:
-
-```powershell
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-Installing `xgboost` may take a little while. If installation fails, confirm that Python is 64-bit and that the virtual environment is active, then upgrade pip and retry.
-
-### 4. Run the terminal application
-
-```powershell
-python MediNexus_Terminal_Forecast.py
-```
-
-Select `1` to forecast, choose a shop using its ID such as `SHOP_01`, then enter a medicine name or ID such as `Steglatro` or `MED0004`. The app also supports partial medicine-name matching. Select `2` to list medicines or `3` to exit.
-
 ## Run the web application
 
-Install the Python dependencies from the project root, then start the API in one terminal:
-
-```powershell
-python -m pip install -r backend\requirements.txt
-cd backend
-python -m uvicorn main:app --reload --port 8000
-```
-
-In a second terminal, start the React frontend:
-
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-
-Open the local URL printed by Vite. Sign in with the email assigned to a shop; each signed-in account is automatically restricted to that shop:
-
-| Shop | Login email |
-| --- | --- |
-| SHOP_01 | `shop_01@medinexus.local` |
-| SHOP_02 | `shop_02@medinexus.local` |
-| SHOP_03 | `shop_03@medinexus.local` |
-| SHOP_04 | `shop_04@medinexus.local` |
-| SHOP_05 | `shop_05@medinexus.local` |
-
-The shared demo password is `Test@123`. These `.local` addresses are login IDs, not mailboxes. Set `MEDINEXUS_LOGIN_PASSWORD` before starting the API to override the demo password. This prototype keeps sessions in memory, expires them after eight hours, and invalidates them when the API restarts; use a persistent identity and session system before deploying it for real users.
-
-Copy the checked-in `.env.example` to `.env` in the project root and add local settings there. The backend loads `.env` at startup; existing process environment variables take precedence. `.env` is ignored by Git, while `.env.example` is safe to check in. The AI Chatbot uses Groq's `openai/gpt-oss-120b` model and reads `GROQ_API_KEY` from this config. Chat answers are based on the signed-in shop's SQLite inventory and supplier records. Chat histories are saved in browser local storage under the signed-in email, so they remain on that browser/device and are not synced elsewhere. This schema does not currently store purchase orders, so the chatbot cannot report existing order status.
-
-Forecast reports can be downloaded as PDFs or emailed from the Forecasting view. Email delivery reads `SMTP_HOST`, `SMTP_FROM_EMAIL`, `SMTP_PORT` (defaults to `587`), `SMTP_USERNAME`, `SMTP_PASSWORD`, and `SMTP_USE_SSL` (`true` for implicit SSL, typically port `465`; otherwise STARTTLS is used) from `.env`. The recipient address is validated in the form and again by the API.
+Follow [INSTALLATION.md](INSTALLATION.md) for the complete setup, including
+Python and Node.js prerequisites, local SQLite database creation, environment
+configuration, and starting the backend and frontend in separate terminals.
+For production, configure persistent authentication and deployment-specific
+settings; the demo app uses in-memory sessions.
 
 ## Store shop data in local databases
 
